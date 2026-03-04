@@ -62,19 +62,13 @@ class DependencyAnalyzer:
     _KNOWN_SINGLE_FILE_MODULES = KNOWN_SINGLE_FILE_MODULES
     _KNOWN_STDLIB_PACKAGES = KNOWN_STDLIB_PACKAGES
 
-    # PyPI 包名到实际模块名的映射表
+    # PyPI 包名到实际模块名的映射表（扩展 PACKAGE_IMPORT_MAP）
     PACKAGE_TO_MODULE_MAPPING: Dict[str, str] = {
-        'dnspython': 'dns',
-        'charset-normalizer': 'charset_normalizer',
+        **PACKAGE_IMPORT_MAP,
         'wxPython': 'wx',
-        'Pillow': 'PIL',
-        'opencv-python': 'cv2',
         'opencv-python-headless': 'cv2',
-        'python-dateutil': 'dateutil',
-        'beautifulsoup4': 'bs4',
         'scikit-learn': 'sklearn',
         'scikit-image': 'skimage',
-        'PyYAML': 'yaml',
         'msgpack-python': 'msgpack',
         'pywin32': 'win32api',
         'pyobjc': 'objc',
@@ -216,6 +210,7 @@ class DependencyAnalyzer:
             依赖包集合
         """
         self.dependencies = set()
+        self.all_imports = set()
         self._project_internal_modules = set()
         self._project_module_paths = set()
 
@@ -593,7 +588,7 @@ class DependencyAnalyzer:
 
         skip_dirs = {
             ".venv", "venv", "build", "dist", "__pycache__", ".git",
-            "node_modules", "site-packages", ".tox", ".pytest_cache",
+                     "node_modules", "site-packages", ".tox", ".pytest_cache",
             "egg-info", ".eggs"
         }
 
@@ -627,7 +622,7 @@ class DependencyAnalyzer:
                         # 在添加之前先检查是否是内部模块
                         if not self._is_internal_module(module_name):
                             self.dependencies.add(module_name)
-                        self.all_imports.add(module_name)
+                            self.all_imports.add(module_name)
 
                 elif isinstance(node, ast.ImportFrom):
                     # 跳过相对导入（level > 0 表示相对导入）
@@ -638,7 +633,7 @@ class DependencyAnalyzer:
                         # 在添加之前先检查是否是内部模块
                         if not self._is_internal_module(module_name):
                             self.dependencies.add(module_name)
-                        self.all_imports.add(module_name)
+                            self.all_imports.add(module_name)
 
         except SyntaxError as e:
             print(f"警告: 文件 {file_path} 语法错误: {e}")

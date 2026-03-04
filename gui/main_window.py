@@ -24,8 +24,10 @@ import webbrowser
 from typing import Any, Dict, Optional
 
 from PyQt6.QtCore import (
+    QSettings,
     Qt,
     QThreadPool,
+    QTimer,
     pyqtSignal,
     pyqtSlot,
 )
@@ -103,6 +105,9 @@ class MainWindow(QMainWindow):
         self._connect_signals()
         self._load_settings()
         self._apply_initial_theme()
+
+        # 延迟检查打开次数，确保主窗口已经显示
+        QTimer.singleShot(1000, self._check_launch_count_and_donate)
 
     def _init_directories(self) -> None:
         """初始化应用程序目录"""
@@ -356,6 +361,11 @@ class MainWindow(QMainWindow):
         about_action.triggered.connect(self._show_about_dialog)
         help_menu.addAction(about_action)
 
+        # ===== 捐赠菜单 =====
+        donate_action = QAction("捐赠", self)
+        donate_action.triggered.connect(self._show_donate_dialog)
+        menubar.addAction(donate_action)
+
     def _show_feedback_dialog(self) -> None:
         """显示问题反馈对话框"""
         dialog = QDialog(self)
@@ -430,8 +440,13 @@ class MainWindow(QMainWindow):
         log_text.setMaximumHeight(200)
         layout.addWidget(log_text)
 
+        # 专属特权说明
+        highlight_color = "#FFD700" if self.theme_manager.is_dark else "#FF0000"
+        vip_label = QLabel(f"<br><span style='color: {highlight_color};'>捐赠用户在遇到打包问题时，将<b>优先获得技术支持和问题排查协助</b>。</span><br>")
+        layout.addWidget(vip_label)
+
         # 作者邮箱
-        email_label = QLabel(f"<br><b>作者邮箱：</b> {AUTHOR_EMAIL}")
+        email_label = QLabel(f"<b>作者邮箱：</b> {AUTHOR_EMAIL}")
         email_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         email_label.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
 
@@ -519,6 +534,110 @@ class MainWindow(QMainWindow):
             clipboard = QApplication.clipboard()
             if clipboard:
                 clipboard.setText(selected_text)
+
+    def _show_donate_dialog(self) -> None:
+        """显示捐赠对话框"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("☕ 请作者喝杯咖啡")
+        dialog.setMinimumWidth(600)
+        dialog.setMinimumHeight(450)
+
+        # 应用与主窗口一致的样式
+        colors = self.theme_manager.colors
+        dialog.setStyleSheet(f"""
+            QDialog {{
+                background-color: {colors.background_primary};
+            }}
+            QLabel {{
+                color: {colors.text_primary};
+            }}
+        """)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(30, 20, 30, 20)
+        layout.setSpacing(15)
+
+        # 感谢语和特权说明
+        highlight_color = "#FFD700" if self.theme_manager.is_dark else "#FF0000"
+        desc_label = QLabel(
+            "感谢您的支持！您的捐赠是我们持续维护和优化的最大动力。<br><br>"
+            "<b>💡 专属福利：</b><br>"
+            f"<span style='color: {highlight_color};'>捐赠用户在遇到打包问题时，将<b>优先获得技术支持和问题排查协助</b>。</span><br>"
+            "（在反馈问题时，请附带您的捐赠截图或备注信息哦）"
+        )
+        desc_label.setWordWrap(True)
+        desc_label.setStyleSheet("font-size: 14px; line-height: 1.5;")
+        layout.addWidget(desc_label)
+
+        # 二维码区域
+        qr_layout = QHBoxLayout()
+        qr_layout.setSpacing(40)
+
+        def create_qr_widget(img_name: str, title: str) -> QWidget:
+            widget = QWidget()
+            v_layout = QVBoxLayout(widget)
+            v_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            v_layout.setContentsMargins(0, 0, 0, 0)
+
+            # 图片
+            img_label = QLabel()
+            img_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "resources", img_name)
+            if os.path.exists(img_path):
+                pixmap = QPixmap(img_path)
+                scaled_pixmap = pixmap.scaled(220, 300, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                img_label.setPixmap(scaled_pixmap)
+            else:
+                img_label.setText(f"[缺少图片文件: {img_name}]")
+
+            img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            v_layout.addWidget(img_label)
+
+            # 标题
+            title_label = QLabel(title)
+            title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            title_label.setStyleSheet("font-weight: bold; font-size: 15px; margin-top: 5px;")
+            v_layout.addWidget(title_label)
+
+            return widget
+
+        # 支付宝
+        alipay_widget = create_qr_widget("alipay.jpg", "支付宝")
+        qr_layout.addWidget(alipay_widget)
+
+        # 微信
+        wechat_widget = create_qr_widget("wechat_pay.png", "微信支付")
+        qr_layout.addWidget(wechat_widget)
+
+        layout.addLayout(qr_layout)
+
+        # 底部关闭按钮
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        close_btn = QPushButton("感谢支持")
+        close_btn.setMinimumWidth(100)
+        close_btn.setMinimumHeight(35)
+        close_btn.setProperty("buttonType", "primary")
+        close_btn.clicked.connect(dialog.accept)
+        btn_layout.addWidget(close_btn)
+        layout.addLayout(btn_layout)
+
+        dialog.exec()
+
+    def _check_launch_count_and_donate(self) -> None:
+        """检查软件打开次数并根据规则弹出捐赠框"""
+        settings = QSettings("PythonPackagingTool", "LaunchCount")
+        count = settings.value("count", 0, type=int)
+
+        count += 1
+        settings.setValue("count", count)
+
+        # 目标次数：5, 10, 20, 30, 40...
+        target_counts = [5, 10]
+        if count > 10 and count % 10 == 0:
+            target_counts.append(count)
+
+        if count in target_counts:
+            self._show_donate_dialog()
 
     def _show_about_dialog(self) -> None:
         """显示关于对话框（支持文本复制）"""
@@ -840,6 +959,16 @@ class MainWindow(QMainWindow):
         self.feedback_label.linkActivated.connect(lambda: self._show_feedback_dialog())
         self.feedback_label.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_layout.addWidget(self.feedback_label)
+
+        # 间距
+        btn_layout.addSpacing(15)
+
+        # 请喝咖啡文字链接
+        self.donate_label = QLabel(f'<a href="#" style="text-decoration: none; color: {colors.text_primary};">☕ 请作者喝杯咖啡</a>')
+        self.donate_label.setOpenExternalLinks(False)
+        self.donate_label.linkActivated.connect(lambda: self._show_donate_dialog())
+        self.donate_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_layout.addWidget(self.donate_label)
 
         btn_layout.addStretch()
 
@@ -1405,6 +1534,11 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'feedback_label'):
             colors = self.theme_manager.colors
             self.feedback_label.setText(f'<a href="#" style="text-decoration: none; color: {colors.text_primary};">问题反馈</a>')
+
+        # 更新捐赠文字颜色
+        if hasattr(self, 'donate_label'):
+            colors = self.theme_manager.colors
+            self.donate_label.setText(f'<a href="#" style="text-decoration: none; color: {colors.text_primary};">☕ 请作者喝杯咖啡</a>')
 
         # 更新日志最大化按钮图标（跟随主题颜色）
         if hasattr(self, 'log_maximize_btn'):

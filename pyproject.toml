@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "python-packaging-tool"
-version = "1.3.0"
+version = "1.5.5"
 description = "A modern GUI tool for packaging Python scripts into Windows executables"
 readme = "README.md"
 requires-python = ">=3.8"

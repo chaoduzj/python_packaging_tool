@@ -227,7 +227,7 @@ STDLIB_MODULES: Set[str] = {
 # 常见的大型库及其子模块（打包时可能需要排除）
 LARGE_PACKAGES: Dict[str, List[str]] = {
     "numpy": ["numpy.tests", "numpy.f2py.tests"],
-    "pandas": ["pandas.tests", "pandas.io.stata", "pandas.io.clipboard"],
+    "pandas": ["pandas.tests"],
     "scipy": ["scipy.tests"],
     "matplotlib": ["matplotlib.tests", "matplotlib.sphinxext"],
     "sklearn": ["sklearn.tests"],

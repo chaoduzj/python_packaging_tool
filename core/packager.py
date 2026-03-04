@@ -727,6 +727,14 @@ VSVersionInfo(
         pack_config = config.copy()
         pack_config["qt_framework"] = qt_framework
 
+        gui_frameworks = self.dependency_analyzer.get_detected_gui_frameworks()
+        deps = getattr(self.dependency_analyzer, "dependencies", set())
+        all_imports = getattr(self.dependency_analyzer, "all_imports", set())
+
+        pack_config["uses_tkinter"] = "Tkinter" in gui_frameworks or "CustomTkinter" in gui_frameworks or "tkinter" in all_imports or "customtkinter" in all_imports
+        pack_config["uses_numpy"] = "numpy" in deps or "numpy" in all_imports
+        pack_config["uses_matplotlib"] = "matplotlib" in deps or "matplotlib" in all_imports
+
         # 添加版本文件到配置
         if version_file:
             pack_config["version_file"] = version_file

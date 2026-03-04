@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from typing import Callable, Dict, List, Optional, Tuple
 
 from utils.constants import CREATE_NO_WINDOW
@@ -196,6 +197,7 @@ class VersionInfoHandler:
 
         对于 subprocess 的列表形式，不需要手动转义，
         subprocess 会自动处理引号和特殊字符。
+        此方法保留反斜杠转义，以防止特殊字符导致问题。
 
         Args:
             text: 需要转义的文本
@@ -205,6 +207,9 @@ class VersionInfoHandler:
         """
         if not text:
             return text
+        # 转义反斜杠和双引号，确保版本信息中不会出现意外的字符解析
+        text = text.replace('\\', '\\\\')
+        text = text.replace('"', '\\"')
         return text
 
     def add_version_info_cmdline(
@@ -892,7 +897,6 @@ class RceditHandler:
                                 else:
                                     if retry < max_retries - 1:
                                         self.log(f"  设置 {field_name} 失败，重试 {retry + 2}/{max_retries}...")
-                                        import time
                                         time.sleep(0.5)
                                     else:
                                         self.log(f"  设置 {field_name} 失败: {result.stderr}")
@@ -903,7 +907,6 @@ class RceditHandler:
                                 # WinError 1392 等文件系统错误
                                 if retry < max_retries - 1:
                                     self.log(f"  设置 {field_name} 出错: {e}，重试 {retry + 2}/{max_retries}...")
-                                    import time
                                     time.sleep(1)  # 等待更长时间
                                 else:
                                     self.log(f"  设置 {field_name} 失败: {e}")
@@ -932,11 +935,9 @@ class RceditHandler:
                                     break
                                 else:
                                     if retry < max_retries - 1:
-                                        import time
                                         time.sleep(0.5)
                             except (subprocess.TimeoutExpired, OSError) as e:
                                 if retry < max_retries - 1:
-                                    import time
                                     time.sleep(1)
                                 else:
                                     self.log(f"  设置版本失败: {e}")
