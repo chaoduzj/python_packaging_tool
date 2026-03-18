@@ -117,10 +117,10 @@ class Packager:
 
         # 2. 检测是否处于 PyInstaller/Nuitka 打包后的环境中
         if PythonFinder.is_bundled_environment():
-            self.log(
-                "检测到当前运行在打包环境中，sys.executable 不可用于创建虚拟环境"
-            )
-            self.log(f"  sys.executable = {sys.executable}")
+            # self.log(
+            #     "检测到当前运行在打包环境中，sys.executable 不可用于创建虚拟环境"
+            # )
+            # self.log(f"  sys.executable = {sys.executable}")
             self.log("正在搜索系统中安装的 Python 解释器...")
 
             finder = PythonFinder()
