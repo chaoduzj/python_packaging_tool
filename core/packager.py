@@ -25,17 +25,22 @@ from core.packaging.network_utils import NetworkUtils
 from core.packaging.nuitka_packager import NuitkaPackager
 from core.packaging.pipeline import PackagingPipeline
 from core.packaging.pipeline_steps import (
+    BuildExecuteStep,
     ChinesePathCheckStep,
+    ConfigEnhanceStep,
     DataFileDetectStep,
     DependencyAnalysisStep,
     DependencyInstallStep,
+    IconInjectStep,
     IconProcessingStep,
     OutputDirStep,
     PackagingToolInstallStep,
     PythonDiscoveryStep,
     QtFrameworkDetectStep,
+    TempCleanupStep,
     VenvSetupStep,
     VersionInfoStep,
+    VersionPostProcessStep,
 )
 from core.packaging.pyinstaller_packager import PyInstallerPackager
 from core.packaging.venv_manager import VenvManager
@@ -85,13 +90,14 @@ class Packager:
     # ------------------------------------------------------------------
 
     def build_pipeline(self) -> PackagingPipeline:
-        """构建打包流水线（可独立测试的 Step 组合）。
+        """构建完整打包流水线（与传统 package() 严格等价）。
 
-        每个 Step 可独立注入 mock 依赖进行测试。
-        当前覆盖：步骤 1-6（发现→图标），步骤 7-12 仍在传统路径中。
+        16 个 Step 对应 package() 的 12 步 + _do_package 的 5 个后处理关注点。
+        每个 Step 委托 Packager 的已验证方法，行为与传统路径一致。
         """
         return PackagingPipeline(
             [
+                # package() 步骤 1-11
                 PythonDiscoveryStep(self),
                 VenvSetupStep(self),
                 ChinesePathCheckStep(self),
@@ -103,6 +109,12 @@ class Packager:
                 IconProcessingStep(self),
                 VersionInfoStep(self),
                 DataFileDetectStep(self),
+                # package() 步骤 12（_do_package 拆解为 5 个后处理 Step）
+                ConfigEnhanceStep(self),
+                IconInjectStep(self),
+                BuildExecuteStep(self),
+                VersionPostProcessStep(self),
+                TempCleanupStep(self),
             ]
         )
 
@@ -1058,12 +1070,44 @@ VSVersionInfo(
         icon_path: Optional[str],
         version_file: Optional[str],
     ) -> Tuple[bool, str]:
-        """执行实际打包"""
+        """执行实际打包（编排 5 个后处理关注点）。
+
+        拆分为 5 个独立私有方法以解耦 rcedit/UPX/清理逻辑，
+        便于扩展维护，并供 Pipeline 的后处理 Step 各自委托。
+        """
         self.log("\n" + "=" * 50)
         self.log("第三阶段：打包")
         self.log("=" * 50)
 
-        # 转换为类型化配置（向后兼容旧的 dict 调用）
+        # 1. 配置增强：填充 qt_framework / GUI 框架标志 / 版本文件
+        pack_config, tool = self._build_pack_config(config, version_file)
+
+        # 2. 图标入口注入（仅 Nuitka + 图标 + 非自打包）
+        self._inject_icon_entry(pack_config, tool, output_dir, icon_path)
+
+        # 3. 执行打包
+        success, message = self._execute_build(
+            python_path, config, pack_config, tool,
+            output_dir, hidden_imports, exclude_modules, icon_path,
+        )
+
+        # 4. 版本信息后处理（rcedit）
+        if success:
+            self._post_process_version_info(pack_config, tool)
+
+        # 5. 清理临时文件
+        self._cleanup_temp_files(pack_config, version_file, icon_path)
+
+        return success, message
+
+    def _build_pack_config(
+        self, config: Dict, version_file: Optional[str]
+    ) -> Tuple[Dict, str]:
+        """后处理关注点 1：配置增强。
+
+        填充 qt_framework、检测到的 GUI 框架标志、版本文件，
+        返回 (旧格式 dict 配置, 打包工具名)。
+        """
         pkg_config = (
             PackagingConfig.from_dict(config) if isinstance(config, dict) else config
         )
@@ -1071,7 +1115,6 @@ VSVersionInfo(
         tool = pkg_config.tool
         self.log(f"使用打包工具: {tool.upper()}")
 
-        # 获取 Qt 框架信息
         qt_framework = self.dependency_analyzer.primary_qt_framework
         pkg_config.qt_framework = qt_framework
 
@@ -1079,7 +1122,6 @@ VSVersionInfo(
         deps = getattr(self.dependency_analyzer, "dependencies", set())
         all_imports = getattr(self.dependency_analyzer, "all_imports", set())
 
-        # 传递检测到的 GUI 框架列表
         pkg_config.detected_gui_frameworks = gui_frameworks
         pkg_config.uses_tkinter = (
             "Tkinter" in gui_frameworks
@@ -1090,19 +1132,23 @@ VSVersionInfo(
         pkg_config.uses_numpy = "numpy" in deps or "numpy" in all_imports
         pkg_config.uses_matplotlib = "matplotlib" in deps or "matplotlib" in all_imports
 
-        # 添加版本文件到配置
         if version_file:
             pkg_config.version_file = version_file
 
-        # 转换为旧格式传递给打包器（过渡期）
-        pack_config = pkg_config.as_dict()
+        return pkg_config.as_dict(), tool
 
-        # 仅在指定图标、使用 Nuitka、且非自打包时注入图标代码
-        # （打包工具自身的 main.py 已有正确的 __compiled__ 检测）
-        _is_self_packaging = os.path.abspath(pack_config["script_path"]) == os.path.abspath(
+    def _inject_icon_entry(
+        self, pack_config: Dict, tool: str, output_dir: str, icon_path: Optional[str]
+    ) -> None:
+        """后处理关注点 2：Nuitka 图标入口注入。
+
+        仅在指定图标、使用 Nuitka、且非自打包时注入图标入口代码
+        （打包工具自身的 main.py 已有正确的 __compiled__ 检测）。
+        """
+        is_self_packaging = os.path.abspath(pack_config["script_path"]) == os.path.abspath(
             os.path.join(os.path.dirname(os.path.dirname(__file__)), "main.py")
         )
-        if icon_path and tool == "nuitka" and not _is_self_packaging:
+        if icon_path and tool == "nuitka" and not is_self_packaging:
             wrapper_path = self._create_icon_entry_wrapper(
                 output_dir, pack_config["script_path"], icon_path
             )
@@ -1110,7 +1156,18 @@ VSVersionInfo(
                 pack_config["script_path"] = wrapper_path
                 self.log("  已注入图标入口代码（兼容 Nuitka onefile 模式）")
 
-        # 选择打包器
+    def _execute_build(
+        self,
+        python_path: str,
+        config: Dict,
+        pack_config: Dict,
+        tool: str,
+        output_dir: str,
+        hidden_imports: List[str],
+        exclude_modules: List[str],
+        icon_path: Optional[str],
+    ) -> Tuple[bool, str]:
+        """后处理关注点 3：调用打包器执行打包。"""
         if tool == "nuitka":
             packager = self.nuitka_packager
             gcc_path = config.get("gcc_path")
@@ -1138,57 +1195,67 @@ VSVersionInfo(
             self._last_exe_path = packager.get_last_exe_path()
             self.log(f"\n打包成功，exe 路径: {self._last_exe_path}")
 
-            # 版本信息后处理（仅 Nuitka + 中文 + 无 UPX）：
-            # - PyInstaller 通过 --version-file 正确嵌入中文，无需 rcedit
-            # - Nuitka + MinGW windres 无法正确处理 UTF-8 中文，需要 rcedit
-            # - Nuitka + UPX：rcedit 破坏 UPX 解压头 → 跳过
-            # - PyInstaller onefile：rcedit 破坏 PKG 存档偏移 → 跳过
-            version_info = (
-                pkg_config.get("version_info", {})
-                if isinstance(pkg_config, dict)
-                else getattr(pkg_config, "version_info", {})
+        return success, message
+
+    def _post_process_version_info(self, pack_config: Dict, tool: str) -> None:
+        """后处理关注点 4：中文版本信息的 rcedit 后处理。
+
+        - PyInstaller 通过 --version-file 正确嵌入中文，无需 rcedit
+        - Nuitka + MinGW windres 无法正确处理 UTF-8 中文，需要 rcedit
+        - Nuitka + UPX：rcedit 破坏 UPX 解压头 → 跳过
+        - PyInstaller onefile：rcedit 破坏 PKG 存档偏移 → 跳过
+        """
+        version_info = (
+            pack_config.get("version_info", {})
+            if isinstance(pack_config, dict)
+            else getattr(pack_config, "version_info", {})
+        )
+        has_chinese = (
+            any(
+                "\u4e00" <= c <= "\u9fff"
+                for v in version_info.values()
+                for c in str(v)
             )
-            has_chinese = (
-                any(
-                    "\u4e00" <= c <= "\u9fff"
-                    for v in version_info.values()
-                    for c in str(v)
+            if version_info
+            else False
+        )
+        upx_enabled = (
+            pack_config.get("upx", False)
+            if isinstance(pack_config, dict)
+            else getattr(pack_config, "upx", False)
+        )
+
+        if has_chinese and self._last_exe_path:
+            if tool != "nuitka":
+                self.log("\n✅ PyInstaller 已通过 --version-file 嵌入中文版本信息，无需 rcedit")
+            elif upx_enabled:
+                self.log(
+                    "\n⚠️ 检测到中文版本信息，但已启用 UPX 压缩，跳过 rcedit 后处理"
                 )
-                if version_info
-                else False
-            )
-            upx_enabled = (
-                pkg_config.get("upx", False)
-                if isinstance(pkg_config, dict)
-                else getattr(pkg_config, "upx", False)
-            )
-
-            if has_chinese and self._last_exe_path:
-                if tool != "nuitka":
-                    self.log("\n✅ PyInstaller 已通过 --version-file 嵌入中文版本信息，无需 rcedit")
-                elif upx_enabled:
-                    self.log(
-                        "\n⚠️ 检测到中文版本信息，但已启用 UPX 压缩，跳过 rcedit 后处理"
-                    )
-                    self.log(
-                        "  UPX 压缩后 rcedit 修改 PE 资源会导致 exe 崩溃 (0xc0000005)"
-                    )
-                    self.log("  建议：如需中文文件属性，请在高级选项中禁用 UPX 压缩")
+                self.log(
+                    "  UPX 压缩后 rcedit 修改 PE 资源会导致 exe 崩溃 (0xc0000005)"
+                )
+                self.log("  建议：如需中文文件属性，请在高级选项中禁用 UPX 压缩")
+            else:
+                self.log("\n检测到中文版本信息，使用 rcedit 后处理...")
+                rcedit_success = self.rcedit_handler.post_process_add_version_info(
+                    self._last_exe_path, version_info
+                )
+                if rcedit_success:
+                    self.log("  ✓ rcedit 后处理完成，中文版本信息已嵌入")
                 else:
-                    self.log("\n检测到中文版本信息，使用 rcedit 后处理...")
-                    rcedit_success = self.rcedit_handler.post_process_add_version_info(
-                        self._last_exe_path, version_info
-                    )
-                    if rcedit_success:
-                        self.log("  ✓ rcedit 后处理完成，中文版本信息已嵌入")
-                    else:
-                        self.log("  ⚠️ rcedit 后处理失败，中文版本信息可能不完整")
+                    self.log("  ⚠️ rcedit 后处理失败，中文版本信息可能不完整")
 
-            self.nuitka_packager.clear_pending_version_info()
-            self.version_info_handler.clear_pending_version_info()
+        self.nuitka_packager.clear_pending_version_info()
+        self.version_info_handler.clear_pending_version_info()
 
-        # 所有后处理完成后，统一清理临时文件
-        # 清理临时版本信息文件
+    def _cleanup_temp_files(
+        self, pack_config: Dict, version_file: Optional[str], icon_path: Optional[str]
+    ) -> None:
+        """后处理关注点 5：统一清理临时文件。
+
+        清理版本信息文件、临时转换图标 (icon_converted.ico)、注入脚本 (_ppt_entry.py)。
+        """
         if version_file and os.path.exists(version_file):
             try:
                 os.remove(version_file)
@@ -1196,7 +1263,6 @@ VSVersionInfo(
             except Exception:
                 pass
 
-        # 清理临时转换的图标文件（icon_converted.ico）
         if (
             icon_path
             and "icon_converted.ico" in icon_path
@@ -1216,8 +1282,6 @@ VSVersionInfo(
                 self.log(f"已清理临时注入脚本: {entry_script}")
             except Exception:
                 pass
-
-        return success, message
 
     def package(
         self,

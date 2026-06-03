@@ -308,3 +308,139 @@ class DataFileDetectStep(PackagingStep):
         script_path = config["script_path"]
         self._packager._auto_detect_data_files(config, project_dir, script_path)
         return context
+
+
+# =============================================================================
+#  Step 12a — 配置增强
+# =============================================================================
+
+class ConfigEnhanceStep(PackagingStep):
+    """填充 qt_framework、GUI 框架标志、版本文件到打包配置。
+
+    委托 Packager._build_pack_config，与传统 _do_package 第 1 关注点等价。
+
+    context 输入: config, version_file
+    context 输出: pack_config, tool
+    """
+
+    def __init__(self, packager: Any):
+        self._packager = packager
+
+    def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        self._packager.log("\n" + "=" * 50)
+        self._packager.log("第三阶段：打包")
+        self._packager.log("=" * 50)
+
+        config = context["config"]
+        version_file = context.get("version_file")
+        pack_config, tool = self._packager._build_pack_config(config, version_file)
+        context["pack_config"] = pack_config
+        context["tool"] = tool
+        return context
+
+
+# =============================================================================
+#  Step 12b — 图标入口注入
+# =============================================================================
+
+class IconInjectStep(PackagingStep):
+    """Nuitka 图标入口注入（仅 Nuitka + 图标 + 非自打包）。
+
+    委托 Packager._inject_icon_entry，与传统 _do_package 第 2 关注点等价。
+
+    context 输入: pack_config, tool, output_dir, icon_path
+    context 输出: (副作用修改 pack_config 的 script_path)
+    """
+
+    def __init__(self, packager: Any):
+        self._packager = packager
+
+    def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        self._packager._inject_icon_entry(
+            context["pack_config"],
+            context["tool"],
+            context["output_dir"],
+            context.get("icon_path"),
+        )
+        return context
+
+
+# =============================================================================
+#  Step 12c — 执行打包
+# =============================================================================
+
+class BuildExecuteStep(PackagingStep):
+    """调用 nuitka/pyinstaller 打包器执行打包。
+
+    委托 Packager._execute_build，与传统 _do_package 第 3 关注点等价。
+
+    context 输入: python_path, config, pack_config, tool, output_dir,
+                  hidden_imports, exclude_modules, icon_path
+    context 输出: success, message
+    """
+
+    def __init__(self, packager: Any):
+        self._packager = packager
+
+    def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        success, message = self._packager._execute_build(
+            context["python_path"],
+            context["config"],
+            context["pack_config"],
+            context["tool"],
+            context["output_dir"],
+            context.get("hidden_imports", []),
+            context.get("exclude_modules", []),
+            context.get("icon_path"),
+        )
+        context["success"] = success
+        context["message"] = message
+        return context
+
+
+# =============================================================================
+#  Step 12d — 版本信息后处理
+# =============================================================================
+
+class VersionPostProcessStep(PackagingStep):
+    """中文版本信息的 rcedit 后处理（含 UPX/PyInstaller-onefile 跳过判定）。
+
+    委托 Packager._post_process_version_info，与传统 _do_package 第 4 关注点等价。
+    仅在打包成功时执行。
+
+    context 输入: success, pack_config, tool
+    """
+
+    def __init__(self, packager: Any):
+        self._packager = packager
+
+    def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        if context.get("success"):
+            self._packager._post_process_version_info(
+                context["pack_config"], context["tool"]
+            )
+        return context
+
+
+# =============================================================================
+#  Step 12e — 临时文件清理
+# =============================================================================
+
+class TempCleanupStep(PackagingStep):
+    """统一清理临时文件（version_info.txt / icon_converted.ico / _ppt_entry.py）。
+
+    委托 Packager._cleanup_temp_files，与传统 _do_package 第 5 关注点等价。
+
+    context 输入: pack_config, version_file, icon_path
+    """
+
+    def __init__(self, packager: Any):
+        self._packager = packager
+
+    def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        self._packager._cleanup_temp_files(
+            context["pack_config"],
+            context.get("version_file"),
+            context.get("icon_path"),
+        )
+        return context
