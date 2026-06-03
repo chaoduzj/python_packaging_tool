@@ -52,25 +52,25 @@ class PythonDiscoveryStep(PackagingStep):
 class VenvSetupStep(PackagingStep):
     """创建/复用项目虚拟环境。
 
+    委托 Packager._setup_venv_if_needed（其内部根据 use_venv 决策），
+    与传统 package() 第 2 步无条件调用方式严格等价。
+
     context 输入: python_path, config
     context 输出: python_path (可能指向 venv)
     """
 
-    def __init__(self, setup_fn: Any):
-        """setup_fn: callable(config, base_python_path) -> resulting python_path"""
-        self._setup_fn = setup_fn
+    def __init__(self, packager: Any):
+        self._packager = packager
 
     def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
         config = context["config"]
         log = context.get("log", print)
-        python_path = context.get("python_path", sys.executable)
+        base_python = context["python_path"]
 
-        if config.get("use_venv", True):
-            new_path = self._setup_fn(config, python_path)
-            if new_path != python_path:
-                log(f"使用虚拟环境 Python: {new_path}")
-                context["python_path"] = new_path
-
+        python_path = self._packager._setup_venv_if_needed(config, base_python)
+        if python_path != base_python:
+            log(f"使用虚拟环境 Python: {python_path}")
+        context["python_path"] = python_path
         return context
 
 

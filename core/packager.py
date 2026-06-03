@@ -88,7 +88,7 @@ class Packager:
         return PackagingPipeline(
             [
                 PythonDiscoveryStep(self),
-                VenvSetupStep(self._setup_venv_if_needed),
+                VenvSetupStep(self),
                 DependencyAnalysisStep(self.dependency_analyzer),
                 DependencyInstallStep(self.dependency_installer),
                 OutputDirStep(),
