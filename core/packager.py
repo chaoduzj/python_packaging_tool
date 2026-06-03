@@ -1281,16 +1281,10 @@ VSVersionInfo(
         process_callback: Optional[Callable] = None,
     ) -> Tuple[bool, str, Optional[str]]:
         """
-        执行打包操作
+        [DEPRECATED] 传统打包入口 — 已由 package_via_pipeline() 取代。
 
-        Args:
-            config: 打包配置字典
-            log_callback: 日志回调函数
-            cancel_flag: 取消标志回调函数
-            process_callback: 进程回调函数
-
-        Returns:
-            (success, message, exe_path) 元组
+        保留此方法用于回退验证，新调用方请使用 package_via_pipeline()。
+        计划在下一阶段（删死代码 + 大文件简化）中移除。
         """
         # 规范化配置：将 PackagingConfig 转为 dict（内部方法仍用 dict）
         if isinstance(config, PackagingConfig):

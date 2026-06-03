@@ -109,7 +109,7 @@ class PackagingHandlerMixin:
                     self.packaging_process = process  # type: ignore[attr-defined]
 
                 packager = Packager()
-                success, message, exe_path = packager.package(
+                success, message, exe_path = packager.package_via_pipeline(
                     config,
                     log_callback=log_callback,
                     cancel_flag=lambda: self.cancel_packaging,  # type: ignore[attr-defined]

@@ -119,8 +119,8 @@ class PackagingWorker(BaseWorker):
             def process_callback(process: subprocess.Popen) -> None:
                 self.set_process(process)
 
-            # 运行打包器
-            success, message, exe_path = self.packager.package(
+            # 运行打包器（Pipeline 路径）
+            success, message, exe_path = self.packager.package_via_pipeline(
                 self.config,
                 log_callback=log_callback,
                 cancel_flag=cancel_check,
