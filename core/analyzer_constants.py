@@ -421,12 +421,7 @@ PLATFORM_SPECIFIC_MODULES: Dict[str, Dict[str, List[str]]] = {
             "psutil._psbsd",
             "psutil._pssunos",
             "psutil._psaix",
-            "psutil._psposix",  # POSIX 共用后端（Linux/macOS/BSD），Windows 不需要
-            "psutil._psutil_linux",
-            "psutil._psutil_osx",
-            "psutil._psutil_bsd",
-            "psutil._psutil_sunos",
-            "psutil._psutil_posix",
+            "psutil._psposix",
         ],
     },
 }
