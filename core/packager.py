@@ -98,7 +98,7 @@ class Packager:
                 DependencyAnalysisStep(self),
                 DependencyInstallStep(self),
                 PackagingToolInstallStep(self.dependency_installer),
-                IconProcessingStep(self.icon_processor),
+                IconProcessingStep(self),
             ]
         )
 

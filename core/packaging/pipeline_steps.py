@@ -1,17 +1,13 @@
 """
 打包流水线步骤 — 从 Packager.package() 12 步流程中提取的核心阶段。
 
-每个 Step 遵循 PackagingStep 协议，独立可测试。
+每个 Step 遵循 PackagingStep 协议，通过委托 Packager 的已验证方法
+保证与传统 package() 路径严格等价。
 """
 
-import os
-import sys
-from typing import TYPE_CHECKING, Any, Dict
+from typing import Any, Dict
 
 from core.packaging.pipeline import PackagingStep
-
-if TYPE_CHECKING:
-    pass
 
 
 # =============================================================================
@@ -246,29 +242,21 @@ class QtFrameworkDetectStep(PackagingStep):
 class IconProcessingStep(PackagingStep):
     """验证并转换图标文件。
 
+    委托 Packager._process_icon，与传统 package() 第 9 步等价
+    （含警告处理、格式转换、路径返回逻辑）。
+
     context 输入: config, output_dir, python_path
     context 输出: icon_path
     """
 
-    def __init__(self, icon_processor: Any):
-        self._processor = icon_processor
+    def __init__(self, packager: Any):
+        self._packager = packager
 
     def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
         config = context["config"]
-        log = context.get("log", print)
         output_dir = context["output_dir"]
         python_path = context["python_path"]
 
-        icon_path = config.get("icon_path") or config.get("icon")
-        if icon_path and os.path.exists(icon_path):
-            log(f"\n处理图标文件: {icon_path}")
-            processed, warnings = self._processor.process_icon_file(
-                icon_path, output_dir, python_path
-            )
-            for w in warnings:
-                log(f"  图标: {w}")
-            context["icon_path"] = processed
-        else:
-            context["icon_path"] = None
-
+        icon_path = self._packager._process_icon(config, output_dir, python_path)
+        context["icon_path"] = icon_path
         return context
