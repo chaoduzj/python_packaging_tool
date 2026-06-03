@@ -1129,6 +1129,19 @@ VSVersionInfo(
         if version_file:
             pkg_config.version_file = version_file
 
+        # 中文版本信息 + UPX 不兼容：UPX 压缩后 rcedit 无法修改 PE 资源段。
+        # 自动禁用 UPX，确保 rcedit 后处理能修复 Nuitka temp 文件名和中文乱码。
+        version_info = pkg_config.version_info or {}
+        has_chinese = any(
+            "\u4e00" <= c <= "\u9fff"
+            for v in version_info.values()
+            for c in str(v)
+        ) if version_info else False
+        if has_chinese and pkg_config.upx and pkg_config.tool == "nuitka":
+            self.log("\n⚠️ 检测到中文版本信息，自动禁用 UPX 压缩")
+            self.log("  UPX 压缩后 rcedit 无法修复 PE 资源中的中文和文件名")
+            pkg_config.upx = False
+
         return pkg_config.as_dict(), tool
 
     def _inject_icon_entry(
@@ -1196,8 +1209,7 @@ VSVersionInfo(
 
         - PyInstaller 通过 --version-file 正确嵌入中文，无需 rcedit
         - Nuitka + MinGW windres 无法正确处理 UTF-8 中文，需要 rcedit
-        - Nuitka + UPX：rcedit 破坏 UPX 解压头 → 跳过
-        - PyInstaller onefile：rcedit 破坏 PKG 存档偏移 → 跳过
+        - UPX 已在 _build_pack_config 中自动禁用（中文+UPX 不兼容）
         """
         version_info = (
             pack_config.get("version_info", {})
@@ -1213,23 +1225,10 @@ VSVersionInfo(
             if version_info
             else False
         )
-        upx_enabled = (
-            pack_config.get("upx", False)
-            if isinstance(pack_config, dict)
-            else getattr(pack_config, "upx", False)
-        )
 
         if has_chinese and self._last_exe_path:
             if tool != "nuitka":
                 self.log("\n✅ PyInstaller 已通过 --version-file 嵌入中文版本信息，无需 rcedit")
-            elif upx_enabled:
-                self.log(
-                    "\n⚠️ 检测到中文版本信息，但已启用 UPX 压缩，跳过 rcedit 后处理"
-                )
-                self.log(
-                    "  UPX 压缩后 rcedit 修改 PE 资源会导致 exe 崩溃 (0xc0000005)"
-                )
-                self.log("  建议：如需中文文件属性，请在高级选项中禁用 UPX 压缩")
             else:
                 self.log("\n检测到中文版本信息，使用 rcedit 后处理...")
                 rcedit_success = self.rcedit_handler.post_process_add_version_info(
