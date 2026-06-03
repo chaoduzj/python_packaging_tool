@@ -26,6 +26,7 @@ from core.packaging.nuitka_packager import NuitkaPackager
 from core.packaging.pipeline import PackagingPipeline
 from core.packaging.pipeline_steps import (
     ChinesePathCheckStep,
+    DataFileDetectStep,
     DependencyAnalysisStep,
     DependencyInstallStep,
     IconProcessingStep,
@@ -34,6 +35,7 @@ from core.packaging.pipeline_steps import (
     PythonDiscoveryStep,
     QtFrameworkDetectStep,
     VenvSetupStep,
+    VersionInfoStep,
 )
 from core.packaging.pyinstaller_packager import PyInstallerPackager
 from core.packaging.venv_manager import VenvManager
@@ -99,6 +101,8 @@ class Packager:
                 DependencyInstallStep(self),
                 PackagingToolInstallStep(self.dependency_installer),
                 IconProcessingStep(self),
+                VersionInfoStep(self),
+                DataFileDetectStep(self),
             ]
         )
 

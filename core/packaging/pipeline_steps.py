@@ -260,3 +260,51 @@ class IconProcessingStep(PackagingStep):
         icon_path = self._packager._process_icon(config, output_dir, python_path)
         context["icon_path"] = icon_path
         return context
+
+
+# =============================================================================
+#  Step 10 — 版本信息准备
+# =============================================================================
+
+class VersionInfoStep(PackagingStep):
+    """准备版本信息文件（PyInstaller --version-file）。
+
+    委托 Packager._prepare_version_info，与传统 package() 第 10 步等价。
+
+    context 输入: config, output_dir
+    context 输出: version_file
+    """
+
+    def __init__(self, packager: Any):
+        self._packager = packager
+
+    def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        config = context["config"]
+        output_dir = context["output_dir"]
+        version_file = self._packager._prepare_version_info(config, output_dir)
+        context["version_file"] = version_file
+        return context
+
+
+# =============================================================================
+#  Step 11 — 运行时数据文件检测
+# =============================================================================
+
+class DataFileDetectStep(PackagingStep):
+    """自动检测并包含运行时数据文件（config.env、icon.* 等）。
+
+    委托 Packager._auto_detect_data_files，与传统 package() 第 11 步等价。
+
+    context 输入: config
+    context 输出: (无新增字段，副作用写入 config 的数据文件列表)
+    """
+
+    def __init__(self, packager: Any):
+        self._packager = packager
+
+    def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        config = context["config"]
+        project_dir = config.get("project_dir")
+        script_path = config["script_path"]
+        self._packager._auto_detect_data_files(config, project_dir, script_path)
+        return context
