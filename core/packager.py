@@ -138,6 +138,10 @@ class Packager:
             self._set_process_callback(process_callback)
 
         try:
+            # 规范化配置（与旧 package() 一致：PackagingConfig → dict）
+            if isinstance(config, PackagingConfig):
+                config = config.as_dict()
+
             pipeline = self.build_pipeline()
             context: Dict[str, Any] = {
                 "config": config,
