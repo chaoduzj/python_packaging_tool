@@ -1203,7 +1203,46 @@ VSVersionInfo(
             self._last_exe_path = packager.get_last_exe_path()
             self.log(f"\n打包成功，exe 路径: {self._last_exe_path}")
 
+            # Nuitka standalone 模式：重命名 dist 目录为程序名称
+            if tool == "nuitka" and not pack_config.get("onefile", True):
+                self._rename_nuitka_dist(pack_config)
+
+            # PyInstaller standalone 模式：提示 _internal 目录说明
+            if tool != "nuitka" and not pack_config.get("onefile", True):
+                self.log("\n📁 PyInstaller 独立模式输出说明：")
+                self.log("  exe 同级目录下的 _internal/ 是 PyInstaller 6.x 的必要结构")
+                self.log("  如需单文件分发，请勾选「单文件模式」重新打包")
+
         return success, message
+
+    def _rename_nuitka_dist(self, pack_config: Dict) -> None:
+        """Nuitka standalone：将 dist 目录重命名为程序名称。
+
+        Nuitka 按入口脚本名命名 dist 目录（如 _ppt_entry.dist），
+        重命名为程序名称更直观（如 查重工具/）。
+        """
+        exe_path = self._last_exe_path
+        if not exe_path:
+            return
+        dist_dir = os.path.dirname(exe_path)
+        dist_name = os.path.basename(dist_dir)
+        # 仅当 dist 目录名以 .dist 结尾时才重命名（避免误操作）
+        if not dist_name.endswith(".dist"):
+            return
+        program_name = pack_config.get("program_name", "")
+        if not program_name:
+            return
+        new_dir = os.path.join(os.path.dirname(dist_dir), program_name)
+        if os.path.abspath(dist_dir) == os.path.abspath(new_dir):
+            return
+        try:
+            os.rename(dist_dir, new_dir)
+            # 更新 _last_exe_path 指向新位置
+            exe_name = os.path.basename(exe_path)
+            self._last_exe_path = os.path.join(new_dir, exe_name)
+            self.log(f"  已将输出目录重命名为: {program_name}/")
+        except Exception as e:
+            self.log(f"  ⚠️ 重命名输出目录失败: {e}")
 
     def _post_process_version_info(self, pack_config: Dict, tool: str) -> None:
         """后处理关注点 4：中文版本信息的 rcedit 后处理。
