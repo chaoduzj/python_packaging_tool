@@ -67,6 +67,7 @@ class OptimizationAdvisor:
                 "*.test",
                 "*_test",
                 "*_tests",
+                "*.test_*",  # 匹配 test_api / test_helpers 等
                 "setuptools",
                 "pip",
                 "wheel",
