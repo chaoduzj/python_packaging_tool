@@ -68,3 +68,30 @@ class TestPackageSmokePyInstaller:
         assert exe_path is not None, "未返回 exe 路径"
         assert os.path.isfile(exe_path), f"exe 文件不存在: {exe_path}"
         assert exe_path.lower().endswith(".exe")
+
+    def test_package_side_effects(self, minimal_packable_project):
+        """快照 package() 的可观测副作用：阶段日志 + 输出目录 + 临时文件清理。
+
+        这些断言定义了 Pipeline 迁移后必须保持一致的"严格等价"边界。
+        """
+        project_dir, main_script, output_dir = minimal_packable_project
+        packager = Packager()
+        success, message, exe_path, logs = _run_package(
+            packager, _make_config(main_script, output_dir, "pyinstaller")
+        )
+
+        assert success is True, f"打包失败: {message}"
+        joined = "\n".join(logs)
+
+        # 1. 三个核心阶段日志标志均出现
+        assert "第一阶段：依赖分析" in joined
+        assert "第二阶段：依赖安装" in joined
+        assert "第三阶段：打包" in joined
+
+        # 2. 输出目录被创建
+        assert os.path.isdir(output_dir)
+
+        # 3. 临时文件在打包结束后已清理（不残留）
+        assert not os.path.exists(os.path.join(output_dir, "version_info.txt"))
+        assert not os.path.exists(os.path.join(output_dir, "icon_converted.ico"))
+        assert not os.path.exists(os.path.join(project_dir, "_ppt_entry.py"))
