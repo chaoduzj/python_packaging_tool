@@ -127,7 +127,7 @@ class DependencyAnalyzer:
         # 新增属性
         self._dynamic_imports: Set[str] = set()
         self._auto_collected_modules: Dict[str, List[str]] = {}
-        self._unconfigured_libraries: Set[str] = set()
+        self._auto_analyzed_libraries: Set[str] = set()
         self._module_type_cache: Dict[str, bool] = {}
 
         # 初始化子模块
@@ -196,6 +196,72 @@ class DependencyAnalyzer:
             self.get_detected_gui_frameworks()
         return self._gui_detector.get_framework_data_files()
 
+    def detect_project_data_files(
+        self, project_dir: Optional[str] = None
+    ) -> List[str]:
+        """
+        自动检测项目中需要打包的运行时数据文件
+
+        扫描项目目录，查找常见的配置文件和资源文件：
+        - config.env / .env 配置文件
+        - icon.* 图标文件
+        - loading.gif / splash.png 等资源文件
+
+        Args:
+            project_dir: 项目目录（可选，默认使用内部 _project_dir）
+
+        Returns:
+            检测到的数据文件绝对路径列表
+        """
+        scan_dir = project_dir or self._project_dir
+        if not scan_dir or not os.path.isdir(scan_dir):
+            return []
+
+        detected_files: List[str] = []
+
+        # 配置文件匹配模式
+        config_patterns = [
+            "config.env",
+            ".env",
+            "settings.ini",
+            "settings.conf",
+            "config.ini",
+            "config.json",
+            "config.yaml",
+            "config.yml",
+            "config.toml",
+        ]
+
+        # 资源文件匹配模式
+        resource_patterns = [
+            "loading.gif",
+            "loading.png",
+            "splash.png",
+            "splash.jpg",
+        ]
+
+        # 扫描项目根目录下的配置文件
+        for pattern in config_patterns:
+            candidate = os.path.join(scan_dir, pattern)
+            if os.path.isfile(candidate):
+                detected_files.append(candidate)
+
+        # 扫描 resources 子目录
+        resources_dir = os.path.join(scan_dir, "resources")
+        if os.path.isdir(resources_dir):
+            for pattern in resource_patterns:
+                candidate = os.path.join(resources_dir, pattern)
+                if os.path.isfile(candidate):
+                    detected_files.append(candidate)
+
+        # 扫描项目根目录下的资源文件
+        for pattern in resource_patterns:
+            candidate = os.path.join(scan_dir, pattern)
+            if os.path.isfile(candidate) and candidate not in detected_files:
+                detected_files.append(candidate)
+
+        return detected_files
+
     def analyze(
         self, script_path: str, project_dir: Optional[str] = None
     ) -> Set[str]:
@@ -235,10 +301,14 @@ class DependencyAnalyzer:
         requirements = self._read_requirements(script_path, project_dir)
         self.dependencies.update(requirements)
 
-        # 过滤掉标准库和项目内部模块
+        # 过滤掉标准库和项目内部模块，以及打包/构建工具
+        from core.analyzer_constants import BUILD_DEV_TOOLS
+
         self.dependencies = {
             dep for dep in self.dependencies
-            if not self._is_stdlib(dep) and not self._is_internal_module(dep)
+            if not self._is_stdlib(dep)
+            and not self._is_internal_module(dep)
+            and dep.lower() not in {t.lower() for t in BUILD_DEV_TOOLS}
         }
 
         return self.dependencies
@@ -252,11 +322,11 @@ class DependencyAnalyzer:
         2. 递归收集所有子模块名
         3. 收集完整的模块路径（如 "workers.clash_log_worker"）
         """
-        skip_dirs = {
-            ".venv", "venv", "build", "dist", "__pycache__", ".git",
-            "node_modules", "site-packages", ".tox", ".pytest_cache",
-            "egg-info", ".eggs", ".mypy_cache", ".ruff_cache",
-            ".idea", ".vscode", ".vs", "htmlcov", "coverage",
+        from utils.constants import SKIP_DIRECTORIES
+
+        skip_dirs = set(SKIP_DIRECTORIES) | {
+            ".tox", ".pytest_cache", "egg-info", ".eggs",
+            ".mypy_cache", ".ruff_cache", ".vs", "htmlcov", "coverage",
         }
 
         try:
@@ -547,9 +617,9 @@ class DependencyAnalyzer:
         self._auto_collected_modules[package_name] = submodules
         return submodules
 
-    def collect_all_unconfigured_submodules(self, python_path: str) -> None:
-        """收集所有未配置库的子模块"""
-        auto_collected = self._optimization_advisor.collect_all_unconfigured_submodules(
+    def collect_third_party_submodules(self, python_path: str) -> None:
+        """自动分析第三方库的子模块（未命中加速缓存的库）"""
+        auto_collected = self._optimization_advisor.collect_third_party_submodules(
             self.dependencies,
             python_path,
             self.CONFIGURED_LIBRARIES,
@@ -586,11 +656,9 @@ class DependencyAnalyzer:
         """分析整个项目目录"""
         project_path = Path(project_dir)
 
-        skip_dirs = {
-            ".venv", "venv", "build", "dist", "__pycache__", ".git",
-                     "node_modules", "site-packages", ".tox", ".pytest_cache",
-            "egg-info", ".eggs"
-        }
+        from utils.constants import SKIP_DIRECTORIES
+
+        skip_dirs = set(SKIP_DIRECTORIES) | {".tox", ".pytest_cache", "egg-info", ".eggs"}
 
         for py_file in project_path.rglob("*.py"):
             if any(part in skip_dirs for part in py_file.parts):
@@ -675,7 +743,11 @@ class DependencyAnalyzer:
                             match = re.match(r"^([a-zA-Z0-9_\-]+)", line)
                             if match:
                                 package_name = match.group(1)
-                                requirements.add(package_name)
+                                # 跳过已知的打包/构建工具
+                                from core.analyzer_constants import BUILD_DEV_TOOLS
+
+                                if package_name.lower() not in {t.lower() for t in BUILD_DEV_TOOLS}:
+                                    requirements.add(package_name)
 
                 except Exception as e:
                     print(f"警告: 读取 {req_path} 时出错: {e}")

@@ -171,3 +171,6 @@ python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
+markers = [
+    "slow: 端到端打包测试，运行真实 nuitka/pyinstaller 子进程，耗时较长（用 -m slow 运行，-m 'not slow' 跳过）",
+]

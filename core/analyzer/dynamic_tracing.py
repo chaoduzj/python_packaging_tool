@@ -61,7 +61,7 @@ class DynamicImportTracer:
             (是否成功, 追踪到的模块集合)
         """
         self.log("\n" + "=" * 50)
-        self.log("第一层防护：动态模块导入追踪")
+        self.log("依赖分析阶段 1/3：动态模块导入追踪")
         self.log("=" * 50)
 
         # 检测是否是 GUI 程序

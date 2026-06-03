@@ -100,7 +100,7 @@ class VersionInfoHandler:
             return text
 
         try:
-            text.encode('ascii')
+            text.encode("ascii")
             return text
         except UnicodeEncodeError:
             # 移除非 ASCII 字符，只保留 ASCII 部分
@@ -108,10 +108,10 @@ class VersionInfoHandler:
             for char in text:
                 if ord(char) < 128:
                     ascii_chars.append(char)
-                elif ascii_chars and ascii_chars[-1] != ' ':
-                    ascii_chars.append(' ')
+                elif ascii_chars and ascii_chars[-1] != " ":
+                    ascii_chars.append(" ")
 
-            result = ''.join(ascii_chars).strip()
+            result = "".join(ascii_chars).strip()
             return result if result else "Application"
 
     def convert_version_to_windows_format(self, version_str: str) -> str:
@@ -135,10 +135,10 @@ class VersionInfoHandler:
         version_str = version_str.lstrip("vV")
 
         # 移除所有非数字和非点号的字符
-        cleaned = re.sub(r'[^\d.]', '', version_str)
+        cleaned = re.sub(r"[^\d.]", "", version_str)
 
         # 按点号分割
-        parts = cleaned.split('.')
+        parts = cleaned.split(".")
 
         # 提取数字部分并处理超过 65535 的情况
         numeric_parts = []
@@ -208,7 +208,7 @@ class VersionInfoHandler:
         if not text:
             return text
         # 转义反斜杠和双引号，确保版本信息中不会出现意外的字符解析
-        text = text.replace('\\', '\\\\')
+        text = text.replace("\\", "\\\\")
         text = text.replace('"', '\\"')
         return text
 
@@ -220,7 +220,7 @@ class VersionInfoHandler:
         file_description: str,
         copyright_text: str,
         version_str: str,
-        sanitize_non_ascii: bool = False
+        sanitize_non_ascii: bool = False,
     ) -> None:
         """
         通过命令行参数添加 Windows 版本信息
@@ -313,7 +313,10 @@ class WindowsResourceHandler:
         if rc_exe:
             include_dirs = self.get_windows_sdk_include_dirs()
             if not include_dirs:
-                return False, "检测到 rc.exe，但未找到 Windows SDK Include 目录（windows.h），请安装 Windows SDK C++ 组件"
+                return (
+                    False,
+                    "检测到 rc.exe，但未找到 Windows SDK Include 目录（windows.h），请安装 Windows SDK C++ 组件",
+                )
 
             if "Windows Kits" in rc_exe:
                 return True, f"检测到 Windows SDK (rc.exe: {rc_exe})"
@@ -334,13 +337,22 @@ class WindowsResourceHandler:
 
         for path in sdk_paths:
             if os.path.exists(path):
-                return False, "检测到 Windows SDK 目录，但未找到 rc.exe，可能需要安装 Windows SDK 开发工具"
+                return (
+                    False,
+                    "检测到 Windows SDK 目录，但未找到 rc.exe，可能需要安装 Windows SDK 开发工具",
+                )
 
         for path in vs_paths:
             if os.path.exists(path):
-                return False, "检测到 Visual Studio 目录，但未找到 rc.exe，可能需要安装 C++ 桌面开发工具"
+                return (
+                    False,
+                    "检测到 Visual Studio 目录，但未找到 rc.exe，可能需要安装 C++ 桌面开发工具",
+                )
 
-        return False, "未检测到 Windows SDK 或 Visual Studio，中文版本信息可能无法正常显示"
+        return (
+            False,
+            "未检测到 Windows SDK 或 Visual Studio，中文版本信息可能无法正常显示",
+        )
 
     def find_rc_exe(self) -> Optional[str]:
         """
@@ -398,14 +410,21 @@ class WindowsResourceHandler:
                         continue
 
                     for edition in os.listdir(vs_year_path):
-                        sdk_bin = os.path.join(vs_year_path, edition, "VC", "Tools", "MSVC")
+                        sdk_bin = os.path.join(
+                            vs_year_path, edition, "VC", "Tools", "MSVC"
+                        )
                         if not os.path.exists(sdk_bin):
                             continue
 
                         for msvc_ver in sorted(os.listdir(sdk_bin), reverse=True):
                             for arch in ["x64", "x86"]:
                                 rc_path = os.path.join(
-                                    sdk_bin, msvc_ver, "bin", f"Host{arch}", arch, "rc.exe"
+                                    sdk_bin,
+                                    msvc_ver,
+                                    "bin",
+                                    f"Host{arch}",
+                                    arch,
+                                    "rc.exe",
                                 )
                                 if os.path.exists(rc_path):
                                     return rc_path
@@ -460,7 +479,7 @@ class WindowsResourceHandler:
         file_description: str,
         copyright_text: str,
         version_str: str,
-        icon_path: Optional[str] = None
+        icon_path: Optional[str] = None,
     ) -> Optional[str]:
         """
         创建 Windows 资源文件(.rc)并编译为 .res 文件
@@ -501,7 +520,7 @@ class WindowsResourceHandler:
             copyright_text_escaped = escape_rc_string(copyright_text)
 
             # 构建 .rc 文件内容
-            rc_content = '''// 版本信息资源 - 由 Python打包工具 自动生成
+            rc_content = """// 版本信息资源 - 由 Python打包工具 自动生成
 // 支持中文字符
 
 #ifndef VS_VERSION_INFO
@@ -510,7 +529,7 @@ class WindowsResourceHandler:
 #define VOS_NT_WINDOWS32 0x00040004L
 #define VFT_APP 0x00000001L
 
-'''
+"""
             if icon_path:
                 icon_path_escaped = icon_path.replace("\\", "\\\\").replace("/", "\\\\")
                 rc_content += f'IDI_ICON1 ICON "{icon_path_escaped}"\n\n'
@@ -570,7 +589,11 @@ END
             for include_dir in include_dirs:
                 include_args.extend(["/I", include_dir])
 
-            compile_cmd = [rc_exe, "/fo", res_file_path, "/nologo"] + include_args + [rc_file_path]
+            compile_cmd = (
+                [rc_exe, "/fo", res_file_path, "/nologo"]
+                + include_args
+                + [rc_file_path]
+            )
 
             result = subprocess.run(
                 compile_cmd,
@@ -579,7 +602,7 @@ END
                 encoding="utf-8",
                 errors="replace",
                 creationflags=CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-                cwd=output_dir
+                cwd=output_dir,
             )
 
             if result.returncode == 0 and os.path.exists(res_file_path):
@@ -617,7 +640,9 @@ class RceditHandler:
         Returns:
             tools/rcedit.exe 的绝对路径
         """
-        tools_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools")
+        tools_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "tools"
+        )
         return os.path.abspath(os.path.join(tools_dir, "rcedit.exe"))
 
     def find_rcedit(self) -> Optional[str]:
@@ -671,7 +696,9 @@ class RceditHandler:
                 "https://gh-proxy.com/https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe",
             ]
 
-            tools_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools")
+            tools_dir = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "..", "tools"
+            )
             os.makedirs(tools_dir, exist_ok=True)
 
             rcedit_path = os.path.join(tools_dir, "rcedit.exe")
@@ -686,7 +713,12 @@ class RceditHandler:
                         if response.status_code == 200:
                             content = response.content
                     else:
-                        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+                        req = urllib.request.Request(
+                            url,
+                            headers={
+                                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+                            },
+                        )
                         with urllib.request.urlopen(req, timeout=60) as resp:
                             if resp.status == 200:
                                 content = resp.read()
@@ -694,7 +726,9 @@ class RceditHandler:
                     if content:
                         # 验证下载的内容是否为有效的 PE 文件（Windows 可执行文件）
                         if not self._validate_pe_file(content):
-                            self.log("  下载的文件不是有效的 Windows 可执行文件，跳过此源")
+                            self.log(
+                                "  下载的文件不是有效的 Windows 可执行文件，跳过此源"
+                            )
                             continue
 
                         with open(rcedit_path, "wb") as f:
@@ -727,16 +761,16 @@ class RceditHandler:
             return False
 
         # 检查 DOS 头魔数 "MZ"
-        if content[:2] != b'MZ':
+        if content[:2] != b"MZ":
             return False
 
         # 获取 PE 头偏移量
-        pe_offset = int.from_bytes(content[60:64], 'little')
+        pe_offset = int.from_bytes(content[60:64], "little")
         if pe_offset + 4 > len(content):
             return False
 
         # 检查 PE 签名 "PE\0\0"
-        if content[pe_offset:pe_offset + 4] != b'PE\x00\x00':
+        if content[pe_offset : pe_offset + 4] != b"PE\x00\x00":
             return False
 
         return True
@@ -755,7 +789,7 @@ class RceditHandler:
             return False
 
         try:
-            with open(path, 'rb') as f:
+            with open(path, "rb") as f:
                 content = f.read(1024)  # 只读取前 1KB 用于验证
                 return self._validate_pe_file(content)
         except Exception:
@@ -839,13 +873,17 @@ class RceditHandler:
             self.log(f"  错误: 无法读取 exe 文件信息: {e}")
             return False
 
-        product_name = version_info.get('product_name', '')
-        company_name = version_info.get('company_name', '')
-        file_description = version_info.get('file_description', '')
+        product_name = version_info.get("product_name", "")
+        company_name = version_info.get("company_name", "")
+        file_description = version_info.get("file_description", "")
         # 同时支持 'copyright' 和 'copyright_text' 两种键名
-        copyright_text = version_info.get('copyright_text', '') or version_info.get('copyright', '')
+        copyright_text = version_info.get("copyright_text", "") or version_info.get(
+            "copyright", ""
+        )
         # 同时支持 'version' 和 'version_str' 两种键名
-        version_str = version_info.get('version_str', '') or version_info.get('version', '')
+        version_str = version_info.get("version_str", "") or version_info.get(
+            "version", ""
+        )
 
         try:
             rcedit_exe = self.find_or_download_rcedit()
@@ -859,13 +897,17 @@ class RceditHandler:
                         [rcedit_exe, "--help"],
                         capture_output=True,
                         timeout=10,
-                        creationflags=CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                        creationflags=CREATE_NO_WINDOW
+                        if sys.platform == "win32"
+                        else 0,
                     )
                     # rcedit --help 返回非零也是正常的
                 except Exception as e:
                     self.log(f"  警告: rcedit 验证失败: {e}")
 
-                windows_version = self.version_handler.convert_version_to_windows_format(version_str)
+                windows_version = (
+                    self.version_handler.convert_version_to_windows_format(version_str)
+                )
                 success = True
                 max_retries = 3
 
@@ -883,30 +925,44 @@ class RceditHandler:
                         for retry in range(max_retries):
                             try:
                                 result = subprocess.run(
-                                    [rcedit_exe, exe_path, "--set-version-string", field_name, field_value],
+                                    [
+                                        rcedit_exe,
+                                        exe_path,
+                                        "--set-version-string",
+                                        field_name,
+                                        field_value,
+                                    ],
                                     capture_output=True,
                                     text=True,
                                     encoding="utf-8",
                                     errors="replace",
                                     timeout=60,
-                                    creationflags=CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                                    creationflags=CREATE_NO_WINDOW
+                                    if sys.platform == "win32"
+                                    else 0,
                                 )
                                 if result.returncode == 0:
                                     field_success = True
                                     break
                                 else:
                                     if retry < max_retries - 1:
-                                        self.log(f"  设置 {field_name} 失败，重试 {retry + 2}/{max_retries}...")
+                                        self.log(
+                                            f"  设置 {field_name} 失败，重试 {retry + 2}/{max_retries}..."
+                                        )
                                         time.sleep(0.5)
                                     else:
-                                        self.log(f"  设置 {field_name} 失败: {result.stderr}")
+                                        self.log(
+                                            f"  设置 {field_name} 失败: {result.stderr}"
+                                        )
                             except subprocess.TimeoutExpired:
                                 self.log(f"  设置 {field_name} 超时")
                                 break
                             except OSError as e:
                                 # WinError 1392 等文件系统错误
                                 if retry < max_retries - 1:
-                                    self.log(f"  设置 {field_name} 出错: {e}，重试 {retry + 2}/{max_retries}...")
+                                    self.log(
+                                        f"  设置 {field_name} 出错: {e}，重试 {retry + 2}/{max_retries}..."
+                                    )
                                     time.sleep(1)  # 等待更长时间
                                 else:
                                     self.log(f"  设置 {field_name} 失败: {e}")
@@ -922,13 +978,20 @@ class RceditHandler:
                         for retry in range(max_retries):
                             try:
                                 result = subprocess.run(
-                                    [rcedit_exe, exe_path, version_type, windows_version],
+                                    [
+                                        rcedit_exe,
+                                        exe_path,
+                                        version_type,
+                                        windows_version,
+                                    ],
                                     capture_output=True,
                                     text=True,
                                     encoding="utf-8",
                                     errors="replace",
                                     timeout=60,
-                                    creationflags=CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                                    creationflags=CREATE_NO_WINDOW
+                                    if sys.platform == "win32"
+                                    else 0,
                                 )
                                 if result.returncode == 0:
                                     version_success = True
@@ -957,7 +1020,7 @@ class RceditHandler:
 
         except OSError as e:
             # 处理 Windows 文件系统错误
-            error_code = getattr(e, 'winerror', None)
+            error_code = getattr(e, "winerror", None)
             if error_code == 1392:
                 self.log("  后处理出错: 文件系统错误 (WinError 1392)")
                 self.log("  可能原因: 防病毒软件干扰、文件被占用或磁盘问题")
@@ -1003,24 +1066,29 @@ class RceditHandler:
 
         try:
             res_file = self.resource_handler.create_version_resource_file(
-                output_dir=version_info.get('output_dir', os.path.dirname(exe_path)),
-                script_name=version_info.get('script_name', 'Application'),
-                product_name=version_info.get('product_name', ''),
-                company_name=version_info.get('company_name', ''),
-                file_description=version_info.get('file_description', ''),
-                copyright_text=version_info.get('copyright_text', ''),
-                version_str=version_info.get('version_str', '1.0.0.0'),
-                icon_path=None
+                output_dir=version_info.get("output_dir", os.path.dirname(exe_path)),
+                script_name=version_info.get("script_name", "Application"),
+                product_name=version_info.get("product_name", ""),
+                company_name=version_info.get("company_name", ""),
+                file_description=version_info.get("file_description", ""),
+                copyright_text=version_info.get("copyright_text", ""),
+                version_str=version_info.get("version_str", "1.0.0.0"),
+                icon_path=None,
             )
 
             if res_file and os.path.exists(res_file):
                 cmd = [
                     rh_exe,
-                    "-open", exe_path,
-                    "-save", exe_path,
-                    "-action", "addoverwrite",
-                    "-res", res_file,
-                    "-mask", "VERSIONINFO,,"
+                    "-open",
+                    exe_path,
+                    "-save",
+                    exe_path,
+                    "-action",
+                    "addoverwrite",
+                    "-res",
+                    res_file,
+                    "-mask",
+                    "VERSIONINFO,,",
                 ]
 
                 result = subprocess.run(

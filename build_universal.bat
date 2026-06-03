@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 REM Force UTF-8 encoding and clear screen
 chcp 65001 >nul 2>&1
 if errorlevel 1 chcp 936 >nul 2>&1
@@ -46,7 +46,7 @@ REM Project basic information (will be auto-detected from version.py if exists)
 REM These are fallback values if version.py is not found
 set "PROJECT_NAME=Python Packaging Tool"
 set "PROJECT_DISPLAY_NAME=Python Packaging Tool"
-set "COMPANY_NAME=WKLAN.CN"
+set "COMPANY_NAME=WKLAN.COM"
 set "PROJECT_DESCRIPTION=Python Packaging Tool"
 set "PROJECT_VERSION=1.0"
 set "PROJECT_COPYRIGHT=Copyright © 2026"
@@ -140,13 +140,18 @@ REM Define log function immediately after ERROR_LOG is set
 REM Jump over the function definition to continue with main script
 goto :after_log_echo_def
 :log_echo
-set "LOG_MSG=%~1"
-if "!LOG_MSG!"=="" (
-echo.
-    if defined ERROR_LOG echo. >> "%ERROR_LOG%"
+rem Capture the entire argument string (supports multi-word messages without quoting)
+set "LOG_MSG=%*"
+rem Treat literal two double-quotes ("") and empty as blank line
+if defined LOG_MSG (
+    if !LOG_MSG!.=="". set "LOG_MSG="
+)
+if not defined LOG_MSG (
+    echo.
+    if defined ERROR_LOG echo.>>"%ERROR_LOG%"
 ) else (
     echo !LOG_MSG!
-    if defined ERROR_LOG echo !LOG_MSG! >> "%ERROR_LOG%"
+    if defined ERROR_LOG echo !LOG_MSG!>>"%ERROR_LOG%"
 )
 goto :eof
 :after_log_echo_def
@@ -182,20 +187,8 @@ REM Smart GCC cache management
 call :log_echo [GCC Manager] Smart checking GCC compiler cache...
 call :manage_gcc_cache
 
-REM Select Python interpreter: prefer project virtualenv, otherwise use system Python
-if exist "%VENV_DIR%\Scripts\python.exe" (
-    echo [Info] Project virtualenv Python: "%VENV_DIR%\Scripts\python.exe"
-    set "PYTHON_EXE=%VENV_DIR%\Scripts\python.exe"
-    if exist "%VENV_DIR%\Scripts\pip.exe" (
-        set "PIP_EXE=%VENV_DIR%\Scripts\pip.exe"
-    ) else (
-        set "PIP_EXE=%VENV_DIR%\Scripts\python.exe -m pip"
-    )
-) else (
-    echo [Info] Virtual environment not found, system Python will be used
-    set "PYTHON_EXE=python"
-    set "PIP_EXE=pip"
-)
+REM Select Python interpreter (priority: .venv > PYTHON_HOME > pyenv-win > standard install paths > system PATH)
+call :detect_python_interpreter
 
 REM Validate Python environment
 call :log_echo [Check] Validating Python environment...
@@ -527,6 +520,24 @@ REM ============================================
 REM Function Definitions
 REM ============================================
 
+REM ============================================
+REM Detect Python interpreter on Windows
+REM Search order (first match wins):
+REM   1. Project virtualenv      : %VENV_DIR%\Scripts\python.exe
+REM   2. PYTHON_HOME env var     : %PYTHON_HOME%\python.exe
+REM   3. pyenv-win               : %USERPROFILE%\.pyenv\pyenv-win\versions\<ver>\python.exe
+REM      (prefers active version recorded in pyenv-win\version, otherwise latest)
+REM   4. Per-user python.org     : %LOCALAPPDATA%\Programs\Python\Python*\python.exe
+REM   5. System-wide python.org  : %ProgramFiles%\Python*\python.exe / %ProgramFiles(x86)%\Python*\python.exe
+REM   6. Legacy path             : C:\Python*\python.exe
+REM   7. System PATH (where python)
+REM Sets: PYTHON_EXE, PIP_EXE
+REM ============================================
+:detect_python_interpreter
+set "LOG_PREFIX=call :log_echo [Python]"
+call "%~dp0scripts\detect_python.cmd"
+goto :eof
+
 REM Detect version info from version.py
 :detect_version_info
 set "VERSION_FILE=!PROJECT_ROOT!version.py"
@@ -777,13 +788,11 @@ for /f "tokens=1-2 delims=." %%a in ('"%PYTHON_EXE%" "!VERSION_CHECK_SCRIPT!" 2^
 
 del "!VERSION_CHECK_SCRIPT!" >nul 2>&1
 
-REM Note: Nuitka 2.8.9 (latest) does not support --windows-force-rc-file
 REM Resource files can be created for Chinese version info, but Nuitka cannot use them directly
 REM We will use command line parameters instead and ensure icon is always added separately
 set "NUITKA_SUPPORTS_RC_FILE=false"
 
 call :log_echo [INFO] Nuitka version: !NUITKA_VERSION_MAJOR!.!NUITKA_VERSION_MINOR!
-call :log_echo [INFO] Note: Nuitka 2.8.9 does not support --windows-force-rc-file, will use command line parameters
 
 goto :eof
 
@@ -1254,9 +1263,9 @@ set "GCC_FETCH_RESULT=!errorlevel!"
 if !GCC_FETCH_RESULT! neq 0 (
     echo [Warning] Failed to fetch latest version from GitHub, using fallback...
     REM Use default version as fallback
-    set "GCC_ZIP=winlibs-x86_64-posix-seh-gcc-15.2.0-mingw-w64msvcrt-13.0.0-r5.zip"
-    set "GCC_URL=https://github.com/brechtsanders/winlibs_mingw/releases/download/15.2.0posix-13.0.0-msvcrt-r5/%GCC_ZIP%"
-    set "GCC_VERSION=15.2.0posix-13.0.0-msvcrt-r5"
+    set "GCC_ZIP=winlibs-x86_64-posix-seh-gcc-16.1.0-mingw-w64ucrt-14.0.0-r2.zip"
+    set "GCC_URL=https://github.com/brechtsanders/winlibs_mingw/releases/download/16.1.0posix-14.0.0-ucrt-r2/%GCC_ZIP%"
+    set "GCC_VERSION=16.1.0posix-14.0.0-ucrt-r2"
 ) else (
     REM Read GitHub API response information
     set "LINE_NUM=0"
@@ -1281,7 +1290,7 @@ if exist "!GCC_ZIP_PATH!" (
     echo [Found] GCC archive already downloaded
 
     REM Check if already extracted
-    set "GCC_EXTRACT_DIR=%GCC_DOWNLOAD_DIR%\!GCC_ZIP:.zip=%"
+    set "GCC_EXTRACT_DIR=%GCC_DOWNLOAD_DIR%\!GCC_ZIP:.zip=!"
     if exist "!GCC_EXTRACT_DIR!" (
         echo [Found] GCC already extracted and ready
         set "NUITKA_CACHE=!GCC_EXTRACT_DIR!"
@@ -1296,11 +1305,11 @@ if exist "!GCC_ZIP_PATH!" (
         )
     )
 ) else (
-    echo [Info] Downloading GCC from GitHub (~380MB)...
+    echo [Info] Downloading GCC from GitHub ^(~380MB^)...
     echo [Info] This may take 5-15 minutes depending on your network speed
     call :download_gcc "!GCC_URL!" "!GCC_ZIP_PATH!"
     if !errorlevel! equ 0 (
-        set "GCC_EXTRACT_DIR=%GCC_DOWNLOAD_DIR%\!GCC_ZIP:.zip=%"
+        set "GCC_EXTRACT_DIR=%GCC_DOWNLOAD_DIR%\!GCC_ZIP:.zip=!"
         call :extract_gcc "!GCC_ZIP_PATH!" "%GCC_DOWNLOAD_DIR%"
         if !errorlevel! equ 0 (
             set "NUITKA_CACHE=!GCC_EXTRACT_DIR!"
@@ -1311,9 +1320,9 @@ if exist "!GCC_ZIP_PATH!" (
 )
 
 echo.
-REM Set GCC path for Nuitka (if not already set)
+REM Set GCC path for Nuitka ^(if not already set^)
 if not defined NUITKA_CACHE (
-    set "NUITKA_CACHE=%GCC_DOWNLOAD_DIR%\!GCC_ZIP:.zip=%"
+    set "NUITKA_CACHE=%GCC_DOWNLOAD_DIR%\!GCC_ZIP:.zip=!"
 )
 
 echo [Success] GCC compiler ready at: !NUITKA_CACHE!
@@ -1550,7 +1559,6 @@ echo [VERSION] File version: !WIN_VERSION!
 echo [VERSION] Product version: !WIN_VERSION!
 
 REM Add version info - use command line parameters (Nuitka 2.8.9 supports Chinese via command line)
-REM Note: Nuitka 2.8.9 does not support --windows-force-rc-file, so we will use command line parameters
 set "RC_FILE_PATH="
 REM Always use version info directly (prefer Chinese if available, fallback to English)
 REM Product name: prefer Chinese (PRODUCT_NAME_VALUE), fallback to English
@@ -1643,8 +1651,15 @@ set "NUITKA_CMD=!NUITKA_CMD! --no-prefer-source-code"
 REM PyQt6 specific configuration include Qt platform plugins and resources
 call :log_echo [INFO] Configuring PyQt6 platform plugins and dependencies
 set "NUITKA_CMD=!NUITKA_CMD! --include-qt-plugins=sensible,platforms,styles,iconengines,imageformats"
-REM Include all necessary PyQt6 data files and DLLs
-set "NUITKA_CMD=!NUITKA_CMD! --include-package-data=PyQt6"
+REM Explicitly include Qt6 plugin DLLs for onefile mode
+REM Find PyQt6 Qt6 plugins directory
+for /f "delims=" %%q in ('"%PYTHON_EXE%" -c "import PyQt6.QtCore; print(str(PyQt6.QtCore.__path__[0]).rsplit(chr(92), 1)[0] + chr(92) + 'Qt6' + chr(92) + 'plugins')" 2^>nul') do set "QT6_PLUGINS_DIR=%%q"
+if defined QT6_PLUGINS_DIR (
+    if exist "!QT6_PLUGINS_DIR!" (
+        set "NUITKA_CMD=!NUITKA_CMD! --include-data-dir=!QT6_PLUGINS_DIR!=PyQt6/Qt6/plugins"
+        call :log_echo [INFO] Including Qt6 plugin DLLs from: !QT6_PLUGINS_DIR!
+    )
+)
 
 REM Add progress and report parameters
 set "NUITKA_CMD=!NUITKA_CMD! --show-progress"
@@ -1663,6 +1678,7 @@ if not "!ICON_PARAM!"=="" (
         if defined ICON_FULL_PATH (
             if exist "!ICON_FULL_PATH!" (
                 set "NUITKA_CMD=!NUITKA_CMD! --include-data-file=!ICON_FULL_PATH!=icon.ico"
+                set "NUITKA_CMD=!NUITKA_CMD! --include-data-file=!ICON_FULL_PATH!=resources/icons/icon.ico"
                 call :log_echo [INFO] Including icon file in package: !ICON_FILE!
             )
         )
@@ -1701,15 +1717,45 @@ set "TEMP_OUTPUT=%TEMP%\nuitka_output_%RANDOM%.txt"
 REM Log the full command for debugging (icon parameter should be visible)
 call :log_echo [DEBUG] Full Nuitka command: !NUITKA_CMD!
 
-REM Write the command to temporary batch file
-REM Simple approach: write the command directly
-> "!TEMP_CMD_FILE!" echo @echo off
->> "!TEMP_CMD_FILE!" echo !NUITKA_CMD!
+REM ============================================================
+REM Write the command to temporary batch file via PowerShell
+REM Reason: NUITKA_CMD contains Chinese (description/copyright) and
+REM special chars like ( ) & in "Copyright (c) 2026 ...".
+REM Using cmd `echo !NUITKA_CMD!` causes cmd to re-parse the string
+REM and may trigger `& was unexpected at this time` if any byte in
+REM the expanded value is interpreted as a command separator.
+REM PowerShell reads the command from an env var (binary-safe) and
+REM writes the file with UTF-8 BOM so cmd (chcp 65001) can read the
+REM Chinese arguments correctly when calling temp.bat.
+REM ============================================================
+set "NUITKA_CMD_FOR_FILE=!NUITKA_CMD!"
+set "TEMP_CMD_FILE_FOR_PS=!TEMP_CMD_FILE!"
+set "PS_WRITE_BAT=%TEMP%\write_nuitka_bat_%RANDOM%.ps1"
+> "!PS_WRITE_BAT!" echo $ErrorActionPreference = 'Stop'
+>> "!PS_WRITE_BAT!" echo $cmd = [Environment]::GetEnvironmentVariable('NUITKA_CMD_FOR_FILE', 'Process')
+>> "!PS_WRITE_BAT!" echo $bat = [Environment]::GetEnvironmentVariable('TEMP_CMD_FILE_FOR_PS', 'Process')
+>> "!PS_WRITE_BAT!" echo $nl  = [Environment]::NewLine
+>> "!PS_WRITE_BAT!" echo $content = '@echo off' + $nl + 'chcp 65001 ^>nul 2^>^&1' + $nl + $cmd + $nl
+>> "!PS_WRITE_BAT!" echo [System.IO.File]::WriteAllText($bat, $content, (New-Object System.Text.UTF8Encoding $true))
+powershell -NoProfile -ExecutionPolicy Bypass -File "!PS_WRITE_BAT!"
+set "WRITE_BAT_RESULT=!errorlevel!"
+if exist "!PS_WRITE_BAT!" del "!PS_WRITE_BAT!" >nul 2>&1
+if !WRITE_BAT_RESULT! neq 0 (
+    call :log_echo [ERROR] Failed to write temp Nuitka command file via PowerShell
+    exit /b 1
+)
+if not exist "!TEMP_CMD_FILE!" (
+    call :log_echo [ERROR] Temp Nuitka command file not created: !TEMP_CMD_FILE!
+    exit /b 1
+)
+
 REM Execute the temporary batch file and capture output
 call "!TEMP_CMD_FILE!" > "!TEMP_OUTPUT!" 2>&1
 set "COMPILE_RESULT=!errorlevel!"
-REM Clean up temporary command file
+REM Clean up temporary command file and env helpers
 if exist "!TEMP_CMD_FILE!" del "!TEMP_CMD_FILE!" >nul 2>&1
+set "NUITKA_CMD_FOR_FILE="
+set "TEMP_CMD_FILE_FOR_PS="
 
 REM Filter output: only show actual errors, suppress help messages
 if exist "!TEMP_OUTPUT!" (

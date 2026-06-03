@@ -12,6 +12,7 @@ from typing import List, Optional, Tuple
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 
+from utils.constants import get_nuitka_containing_dir, is_bundled, is_nuitka_compiled
 
 # 主题图标文件名
 THEME_ICONS = ("check_light.png", "check_dark.png", "radio_light.png", "radio_dark.png")
@@ -20,32 +21,47 @@ THEME_ICONS = ("check_light.png", "check_dark.png", "radio_light.png", "radio_da
 def _find_resource_file(filename: str) -> Optional[str]:
     """
     查找资源文件路径（兼容开发模式和打包后的exe）。
-    
+
     参数:
         filename: 文件名（不含目录）
-    
+
     返回:
         找到的文件完整路径，未找到则返回None
     """
     search_paths: List[str] = []
 
-    if getattr(sys, 'frozen', False):
-        # 打包模式
+    if is_bundled():
+        # Nuitka onefile 解包目录（优先）
+        if is_nuitka_compiled():
+            nuitka_dir = get_nuitka_containing_dir()
+            if nuitka_dir:
+                search_paths.extend(
+                    [
+                        os.path.join(nuitka_dir, filename),
+                        os.path.join(nuitka_dir, "resources", "icons", filename),
+                    ]
+                )
+
+        # PyInstaller 打包模式
         exe_dir = os.path.dirname(sys.executable)
-        meipass = getattr(sys, '_MEIPASS', None)
-        
+        meipass = getattr(sys, "_MEIPASS", None)
+
         if meipass:
-            search_paths.extend([
-                os.path.join(meipass, filename),
-                os.path.join(meipass, "resources", "icons", filename),
-            ])
-        
-        search_paths.extend([
-            os.path.join(exe_dir, filename),
-            os.path.join(exe_dir, "resources", "icons", filename),
-            os.path.join(os.getcwd(), filename),
-            os.path.join(os.getcwd(), "resources", "icons", filename),
-        ])
+            search_paths.extend(
+                [
+                    os.path.join(meipass, filename),
+                    os.path.join(meipass, "resources", "icons", filename),
+                ]
+            )
+
+        search_paths.extend(
+            [
+                os.path.join(exe_dir, filename),
+                os.path.join(exe_dir, "resources", "icons", filename),
+                os.path.join(os.getcwd(), filename),
+                os.path.join(os.getcwd(), "resources", "icons", filename),
+            ]
+        )
     else:
         # 开发模式：从当前文件向上三级找项目根目录
         current_file = os.path.abspath(__file__)
@@ -61,7 +77,7 @@ def _find_resource_file(filename: str) -> Optional[str]:
 class IconGenerator:
     """
     使用Qt原生绘图生成主题图标。
-    
+
     支持程序化创建图标，无需外部图像文件，任意DPI下完美缩放。
     """
 
@@ -75,7 +91,9 @@ class IconGenerator:
         参数:
             cache_dir: 缓存目录，None时使用系统临时目录
         """
-        self._cache_dir = cache_dir or os.path.join(tempfile.gettempdir(), "python_packaging_tool")
+        self._cache_dir = cache_dir or os.path.join(
+            tempfile.gettempdir(), "python_packaging_tool"
+        )
         self._ensure_cache_dir()
 
     def _ensure_cache_dir(self) -> None:
@@ -125,20 +143,10 @@ class IconGenerator:
         mid_y = size * 0.7
 
         # 第一条线：从左上方到中下方
-        painter.drawLine(
-            int(margin),
-            int(size * 0.5),
-            int(mid_x),
-            int(mid_y)
-        )
+        painter.drawLine(int(margin), int(size * 0.5), int(mid_x), int(mid_y))
 
         # 第二条线：从中下方到右上方
-        painter.drawLine(
-            int(mid_x),
-            int(mid_y),
-            int(size - margin),
-            int(size * 0.25)
-        )
+        painter.drawLine(int(mid_x), int(mid_y), int(size - margin), int(size * 0.25))
 
         painter.end()
         return pixmap
@@ -252,13 +260,13 @@ class IconGenerator:
             图标完整路径（优先资源目录，回退到缓存目录）
         """
         simple_name = os.path.basename(name)
-        
+
         # 主题图标优先从资源目录查找
         if simple_name in THEME_ICONS or "resources" in name:
             resource_path = _find_resource_file(simple_name)
             if resource_path:
                 return resource_path
-        
+
         # 回退到缓存路径
         return os.path.join(self._cache_dir, simple_name)
 
@@ -290,23 +298,17 @@ class IconGenerator:
         painter.setPen(Qt.PenStyle.NoPen)
         margin = size * 0.05
         painter.drawEllipse(
-            int(margin),
-            int(margin),
-            int(size - 2 * margin),
-            int(size - 2 * margin)
+            int(margin), int(margin), int(size - 2 * margin), int(size - 2 * margin)
         )
 
         # 绘制代表Python的"P"字母
         painter.setPen(QPen(QColor(secondary_color), size * 0.08))
         font_size = int(size * 0.5)
         from PyQt6.QtGui import QFont
+
         font = QFont("Arial", font_size, QFont.Weight.Bold)
         painter.setFont(font)
-        painter.drawText(
-            pixmap.rect(),
-            Qt.AlignmentFlag.AlignCenter,
-            "P"
-        )
+        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "P")
 
         painter.end()
         return QIcon(pixmap)
@@ -326,6 +328,7 @@ def get_icon_generator(cache_dir: Optional[str] = None) -> IconGenerator:
 
 
 # 用于快速生成图标的便捷函数
+
 
 def create_themed_checkbox_icons(
     cache_dir: str,

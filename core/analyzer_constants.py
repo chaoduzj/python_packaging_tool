@@ -328,98 +328,385 @@ FRAMEWORKS_WITH_DATA_FILES: Dict[str, List[Tuple[str, str]]] = {
         # Textual 需要 CSS 样式文件
         ("textual", "textual"),
     ],
+    "wxpython": [
+        # wxPython 需要 locale 目录（语言文件）和 DLL
+        ("wx/locale", "wx/locale"),
+    ],
+    "pygame": [
+        # Pygame 需要资源目录
+        ("pygame", "pygame"),
+    ],
+    "pyglet": [
+        # Pyglet 需要资源文件
+        ("pyglet", "pyglet"),
+    ],
+}
+
+# Nuitka 框架专用选项映射表
+# key: GUI 框架名称（小写）, value: 需要追加的 Nuitka 命令行参数列表
+NUITKA_FRAMEWORK_OPTIONS: Dict[str, List[str]] = {
+    "wxpython": [
+        "--include-package=wx",
+        "--enable-plugin=multiprocessing",
+    ],
+    "kivy": [
+        "--include-package=kivy",
+    ],
+    "flet": [
+        "--include-package=flet",
+        "--include-package=flet_core",
+        "--include-package=flet_runtime",
+    ],
+    "dearpygui": [
+        "--include-package=dearpygui",
+    ],
+    "textual": [
+        "--include-package=textual",
+    ],
+    "pygame": [
+        "--include-package=pygame",
+    ],
+    "pyglet": [
+        "--include-package=pyglet",
+    ],
+    "toga": [
+        "--include-package=toga",
+    ],
+    "eel": [
+        "--include-package=eel",
+    ],
+    "customtkinter": [
+        "--include-package=customtkinter",
+        "--enable-plugin=tk-inter",
+    ],
+    "pysimplegui": [
+        "--include-package=PySimpleGUI",
+    ],
+}
+
+# Nuitka 有官方插件的框架映射
+# key: 框架检测名（小写）, value: Nuitka --enable-plugin 的参数值
+NUITKA_OFFICIAL_PLUGINS: Dict[str, str] = {
+    "pyqt6": "pyqt6",
+    "pyqt5": "pyqt5",
+    "pyside6": "pyside6",
+    "pyside2": "pyside2",
+    "tkinter": "tk-inter",
+    "customtkinter": "tk-inter",
+    "numpy": "numpy",
+    "matplotlib": "matplotlib",
+    "multiprocessing": "multiprocessing",
+}
+
+# 已知的打包/构建/代码分析工具（不应作为项目依赖打包进 exe）
+# 这些工具在依赖分析、隐藏导入生成、排除模块、依赖安装等阶段全部过滤
+BUILD_DEV_TOOLS: frozenset[str] = frozenset({
+    "pyinstaller", "nuitka", "cx_freeze", "py2exe",
+    "black", "mypy", "bandit", "pylint", "flake8",
+    "pyarmor", "safety", "coverage", "pytest",
+    "isort", "ruff", "pre_commit", "tox", "nox",
+    "sphinx", "mkdocs", "pdoc",
+})
+
+# 跨平台库在非当前平台上不需要的后端模块（按需打包，减小 exe 体积）
+# 库会按平台动态加载对应后端，Windows 打包时排除 Linux/macOS/BSD 等后端。
+# 来源：各库官方源码的平台后端命名约定
+# 格式: "库名": { "win32": [当前平台需保留], "exclude_on_win32": [Windows 上排除] }
+PLATFORM_SPECIFIC_MODULES: Dict[str, Dict[str, List[str]]] = {
+    # psutil 来源: https://github.com/giampaolo/psutil
+    "psutil": {
+        "exclude_on_win32": [
+            "psutil._pslinux",
+            "psutil._psosx",
+            "psutil._psbsd",
+            "psutil._pssunos",
+            "psutil._psaix",
+            "psutil._psposix",  # POSIX 共用后端（Linux/macOS/BSD），Windows 不需要
+            "psutil._psutil_linux",
+            "psutil._psutil_osx",
+            "psutil._psutil_bsd",
+            "psutil._psutil_sunos",
+            "psutil._psutil_posix",
+        ],
+    },
 }
 
 # 所有 Qt 绑定包列表（用于冲突检测）
 QT_BINDINGS: Set[str] = {"PyQt6", "PyQt5", "PySide6", "PySide2"}
 
-# 已配置的库列表（用于判断是否使用通用策略）
+# 已配置的库列表（加速缓存）
+#
+# 作用：打包工具在分析子模块时，优先使用此列表中的已知配置（快速路径），
+#       跳过 `pip show` 动态查询。不在此列表中的库仍可通过自动分析正常处理，
+#       只是会产生一次 `pip show` 调用。
+#
+# 维护原则：
+#   - 标准库 → 已在 STDLIB_MODULES 中，不需要在此重复
+#   - 第三方库 → 仅添加 PyPI 上广泛使用的库（数千+ stars / 每月百万+下载量）
+#   - 来源：各库的 PyPI 官方页面 (https://pypi.org/project/<name>/) 和官方文档
+#   - 不在此列表的第三方库：自动分析路径 `pip show -f` + AST import 扫描
 CONFIGURED_LIBRARIES: Set[str] = {
     # GUI框架
-    "PyQt6", "PyQt5", "PySide6", "PySide2", "tkinter", "customtkinter",
-    "wx", "wxPython", "kivy", "flet", "dearpygui", "DearPyGui", "toga",
-    "textual", "PySimpleGUI", "PySimpleGUIQt", "PySimpleGUIWx", "eel",
-    "pyforms", "GUI", "pygui", "libavg", "wax",
+    "PyQt6",
+    "PyQt5",
+    "PySide6",
+    "PySide2",
+    "tkinter",
+    "customtkinter",
+    "wx",
+    "wxPython",
+    "kivy",
+    "flet",
+    "dearpygui",
+    "DearPyGui",
+    "toga",
+    "textual",
+    "PySimpleGUI",
+    "PySimpleGUIQt",
+    "PySimpleGUIWx",
+    "eel",
+    "pyforms",
+    "GUI",
+    "pygui",
+    "libavg",
+    "wax",
     # Web爬虫
-    "selenium", "scrapy", "Scrapy", "playwright", "requests_html",
-    "bs4", "beautifulsoup4", "lxml",
+    "selenium",
+    "scrapy",
+    "Scrapy",
+    "playwright",
+    "requests_html",
+    "bs4",
+    "beautifulsoup4",
+    "lxml",
     # Web框架
-    "flask", "Flask", "django", "Django", "fastapi", "tornado", "aiohttp",
-    "gradio", "streamlit", "dash", "bokeh", "altair",
+    "flask",
+    "Flask",
+    "django",
+    "Django",
+    "fastapi",
+    "tornado",
+    "aiohttp",
+    "gradio",
+    "streamlit",
+    "dash",
+    "bokeh",
+    "altair",
     # 数据科学
-    "numpy", "pandas", "scipy", "matplotlib", "seaborn", "plotly",
+    "numpy",
+    "pandas",
+    "scipy",
+    "matplotlib",
+    "seaborn",
+    "plotly",
     "statsmodels",
     # 机器学习
-    "sklearn", "scikit-learn", "tensorflow", "tf", "torch", "pytorch",
-    "transformers", "xgboost", "lightgbm", "catboost", "onnxruntime",
+    "sklearn",
+    "scikit-learn",
+    "tensorflow",
+    "tf",
+    "torch",
+    "pytorch",
+    "transformers",
+    "xgboost",
+    "lightgbm",
+    "catboost",
+    "onnxruntime",
     # 数据库
-    "pymongo", "redis", "pymysql", "psycopg2", "sqlalchemy", "SQLAlchemy",
-    "sqlmodel", "alembic", "peewee", "motor", "aiomysql", "aiopg",
+    "pymongo",
+    "redis",
+    "pymysql",
+    "psycopg2",
+    "sqlalchemy",
+    "SQLAlchemy",
+    "sqlmodel",
+    "alembic",
+    "peewee",
+    "motor",
+    "aiomysql",
+    "aiopg",
     # 办公文档
-    "openpyxl", "xlrd", "xlwt", "docx", "python-docx", "pptx", "python-pptx",
-    "PyPDF2", "pypdf", "pdfplumber", "fitz", "pymupdf", "reportlab",
+    "openpyxl",
+    "xlrd",
+    "xlwt",
+    "docx",
+    "python-docx",
+    "pptx",
+    "python-pptx",
+    "PyPDF2",
+    "pypdf",
+    "pdfplumber",
+    "fitz",
+    "pymupdf",
+    "reportlab",
     # 任务调度
-    "celery", "Celery", "apscheduler", "schedule",
+    "celery",
+    "Celery",
+    "apscheduler",
+    "schedule",
     # 实用工具
-    "requests", "httpx", "loguru", "tqdm", "click", "typer", "colorama",
-    "arrow", "pendulum", "jieba", "qrcode", "pyqrcode", "barcode",
-    "python-barcode", "watchdog", "dotenv", "python-dotenv", "pydantic",
-    "marshmallow", "tenacity", "retrying", "faker", "Faker", "attrs", "attr",
+    "requests",
+    "httpx",
+    "loguru",
+    "tqdm",
+    "click",
+    "typer",
+    "colorama",
+    "arrow",
+    "pendulum",
+    "jieba",
+    "qrcode",
+    "pyqrcode",
+    "barcode",
+    "python-barcode",
+    "watchdog",
+    "dotenv",
+    "python-dotenv",
+    "pydantic",
+    "marshmallow",
+    "tenacity",
+    "retrying",
+    "faker",
+    "Faker",
+    "attrs",
+    "attr",
     # 网络
-    "websocket", "websocket-client", "paramiko", "sshtunnel",
-    "httptools", "uvloop",
-    "gunicorn", "urllib3", "dns", "dnspython", "httplib2", "aiohttp",
-    "certifi", "chardet", "charset_normalizer", "idna",
+    "websocket",
+    "websocket-client",
+    "paramiko",
+    "sshtunnel",
+    "httptools",
+    "uvloop",
+    "gunicorn",
+    "urllib3",
+    "dns",
+    "dnspython",
+    "httplib2",
+    "aiohttp",
+    "certifi",
+    "chardet",
+    "charset_normalizer",
+    "idna",
     # 图像
-    "PIL", "Pillow", "pillow-simd", "cv2", "imageio", "pytesseract",
+    "PIL",
+    "Pillow",
+    "pillow-simd",
+    "cv2",
+    "imageio",
+    "pytesseract",
     "easyocr",
     # 音频
-    "pygame", "pyglet", "arcade", "panda3d", "ursina", "sounddevice",
-    "soundfile", "pyaudio", "pydub",
-    # 系统交互
-    "win32api", "win32com", "win32gui", "win32process", "pywin32",
-    "pyautogui", "pynput", "keyboard", "mouse", "comtypes", "pythonnet", "clr",
+    "pygame",
+    "pyglet",
+    "arcade",
+    "panda3d",
+    "ursina",
+    "sounddevice",
+    "soundfile",
+    "pyaudio",
+    "pydub",
+    # 系统交互 / 进程管理
+    "psutil",
+    "win32api",
+    "win32com",
+    "win32gui",
+    "win32process",
+    "pywin32",
+    "pyautogui",
+    "pynput",
+    "keyboard",
+    "mouse",
+    "comtypes",
+    "pythonnet",
+    "clr",
     # 缓存序列化
-    "joblib", "dill", "cloudpickle", "cachetools", "diskcache",
+    "joblib",
+    "dill",
+    "cloudpickle",
+    "cachetools",
+    "diskcache",
     # 日期时间
-    "pytz", "dateutil", "python-dateutil",
+    "pytz",
+    "dateutil",
+    "python-dateutil",
     # Markdown
-    "markdown", "mistune",
+    "markdown",
+    "mistune",
     # 加密
-    "cryptography", "Crypto", "pycryptodome",
+    "cryptography",
+    "Crypto",
+    "pycryptodome",
     # YAML/TOML
-    "yaml", "pyyaml", "toml", "tomli",
+    "yaml",
+    "pyyaml",
+    "toml",
+    "tomli",
     # 其他
-    "magic", "python-magic",
+    "magic",
+    "python-magic",
 }
 
-# 包名到导入名的映射（处理安装名和导入名不一致的情况）
+# 包名到导入名的映射（处理 PyPI 安装名和 Python import 名不一致的情况）
+#
+# 来源：各库的 PyPI 官方页面 (https://pypi.org/project/<name>/) 和官方文档
+# 格式: "pip install 名称": "import 名称"
 PACKAGE_IMPORT_MAP: Dict[str, str] = {
-    'dnspython': 'dns',
-    'pillow': 'PIL',
-    'beautifulsoup4': 'bs4',
-    'pyyaml': 'yaml',
-    'python-dateutil': 'dateutil',
-    'opencv-python': 'cv2',
-    'opencv-contrib-python': 'cv2',
-    'pymysql': 'pymysql',
-    'mysql-connector-python': 'mysql.connector',
-    'requests': 'requests',
-    'urllib3': 'urllib3',
-    'certifi': 'certifi',
-    'charset-normalizer': 'charset_normalizer',
-    'idna': 'idna',
+    # pip install X → import Y
+    "dnspython": "dns",
+    "pillow": "PIL",
+    "beautifulsoup4": "bs4",
+    "pyyaml": "yaml",
+    "python-dateutil": "dateutil",
+    "opencv-python": "cv2",
+    "opencv-contrib-python": "cv2",
+    "python-docx": "docx",
+    "python-pptx": "pptx",
+    "scikit-learn": "sklearn",
+    "scikit-image": "skimage",
+    "pycryptodome": "Crypto",
+    "pycryptodomex": "Cryptodome",
+    "pymysql": "pymysql",
+    "mysql-connector-python": "mysql.connector",
+    "psycopg2-binary": "psycopg2",
+    "pywin32": "win32api",
+    "python-dotenv": "dotenv",
+    "PyMuPDF": "fitz",
+    "requests": "requests",
+    "urllib3": "urllib3",
+    "certifi": "certifi",
+    "charset-normalizer": "charset_normalizer",
+    "idna": "idna",
+    "cffi": "cffi",
+    "ruamel.yaml": "ruamel",
 }
 
 # 已知的单文件模块（明确不是包）
 KNOWN_SINGLE_FILE_MODULES: Set[str] = {
-    'img2pdf', 'pyperclip', 'keyboard', 'mouse', 'pynput',
-    'colorama', 'tqdm', 'click',
+    "img2pdf",
+    "pyperclip",
+    "keyboard",
+    "mouse",
+    "pynput",
+    "colorama",
+    "tqdm",
+    "click",
 }
 
 # 已知的标准库包（明确是包）
 KNOWN_STDLIB_PACKAGES: Set[str] = {
-    'email', 'http', 'urllib', 'xml', 'json', 'logging',
-    'multiprocessing', 'concurrent', 'asyncio', 'collections',
-    'distutils', 'unittest', 'doctest', 'pdb', 'pydoc',
+    "email",
+    "http",
+    "urllib",
+    "xml",
+    "json",
+    "logging",
+    "multiprocessing",
+    "concurrent",
+    "asyncio",
+    "collections",
+    "distutils",
+    "unittest",
+    "doctest",
+    "pdb",
+    "pydoc",
 }

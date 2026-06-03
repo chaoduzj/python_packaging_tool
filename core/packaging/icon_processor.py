@@ -878,7 +878,6 @@ if __name__ == "__main__":
             return icon_path, warnings
 
         # 需要重新生成
-        warnings.append(f"原始 ICO 需要重新生成: {reason}")
         self.log(f"  ICO 需要重新生成: {reason}")
 
         # 尝试转换（优先当前进程 Pillow，其次 subprocess）
@@ -997,8 +996,6 @@ if __name__ == "__main__":
             self._build_ico_file(img, ico_path)
             img.close()
 
-            self.log(f"✓ 已生成多尺寸 ICO 文件: {ico_path}")
-            self._log_ico_diagnostics(ico_path, svg_path)
             self._verify_ico_file(ico_path, warnings)
 
             return ico_path, warnings
@@ -1031,15 +1028,10 @@ if __name__ == "__main__":
             if img.mode != 'RGBA':
                 img = img.convert('RGBA')
 
-            original_size = img.size
-            self.log(f"源图片尺寸: {original_size[0]}x{original_size[1]}")
-
             ico_path = os.path.join(output_dir, "icon_converted.ico")
             self._build_ico_file(img, ico_path)
             img.close()
 
-            self.log(f"✓ 已生成多尺寸 ICO 文件: {ico_path}")
-            self._log_ico_diagnostics(ico_path, svg_path)
             self._verify_ico_file(ico_path, warnings)
 
             return ico_path, warnings
@@ -1128,16 +1120,12 @@ if __name__ == "__main__":
 
     def _log_subprocess_result(self, result: dict) -> None:
         """输出 subprocess 转换结果的日志"""
-        for log_line in result.get("log", []):
-            self.log(log_line)
-
         ico_path = result.get("ico_path", "")
         if ico_path and os.path.exists(ico_path):
             ico_size = os.path.getsize(ico_path)
             sizes_info = result.get("sizes_info", [])
             self.log(f"✓ 已生成多尺寸 ICO 文件: {ico_path}")
             if sizes_info:
-                self.log(f"  ICO 文件: {ico_size} 字节, 包含 {len(sizes_info)} 个图标")
                 self.log(f"  包含尺寸: {', '.join(sizes_info)}")
 
     # ------------------------------------------------------------------
@@ -1176,7 +1164,6 @@ if __name__ == "__main__":
             # 打开源图片
             img = Image.open(source_path)
             original_size = img.size
-            self.log(f"源图片尺寸: {original_size[0]}x{original_size[1]}")
 
             # 检查图片尺寸是否太小
             if original_size[0] < 16 or original_size[1] < 16:
@@ -1206,8 +1193,6 @@ if __name__ == "__main__":
             # 生成多尺寸图标并构建 ICO 数据
             ico_path = os.path.join(output_dir, "icon_converted.ico")
             self._build_ico_file(img, ico_path)
-
-            self.log(f"✓ 已生成多尺寸 ICO 文件: {ico_path}")
 
             # 输出诊断信息
             self._log_ico_diagnostics(ico_path, source_path)
@@ -1254,7 +1239,6 @@ if __name__ == "__main__":
         for size in self.ICO_SIZES:
             w, h = size
             resized = source_img.resize(size, Image.Resampling.LANCZOS)
-            self.log(f"  生成 {w}x{h} 尺寸 ({'PNG' if w >= self.PNG_THRESHOLD else 'BMP'})")
 
             if w >= self.PNG_THRESHOLD:
                 # 256x256 使用 PNG 压缩
@@ -1357,29 +1341,12 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------
 
     def _log_ico_diagnostics(self, ico_path: str, source_path: str) -> None:
-        """
-        输出 ICO 文件诊断信息，帮助排查图标问题
-
-        Args:
-            ico_path: 生成的 ICO 文件路径
-            source_path: 源图片路径
-        """
+        """输出 ICO 文件诊断信息"""
         try:
-            import hashlib
-
-            # 计算源文件哈希
-            with open(source_path, 'rb') as f:
-                source_hash = hashlib.md5(f.read()).hexdigest()[:8]
-
-            # 计算生成的 ICO 文件信息
             ico_size = os.path.getsize(ico_path)
-            with open(ico_path, 'rb') as f:
-                ico_hash = hashlib.md5(f.read()).hexdigest()[:8]
-
-            self.log(f"  源文件: {os.path.basename(source_path)} (MD5: {source_hash})")
-            self.log(f"  ICO 文件: {ico_size} 字节 (MD5: {ico_hash})")
-        except Exception as e:
-            self.log(f"  诊断信息获取失败: {e}")
+            self.log(f"  ICO 文件: {ico_size} 字节")
+        except Exception:
+            pass
 
     def _verify_ico_file(self, ico_path: str, warnings: List[str]) -> bool:
         """
@@ -1443,10 +1410,6 @@ if __name__ == "__main__":
                 missing = [s for s in required if s not in sizes_found]
                 if missing:
                     warnings.append(f"ICO 文件缺少建议尺寸: {', '.join([f'{w}x{h}' for w, h in missing])}")
-
-                has_256 = (256, 256) in sizes_found
-                if not has_256:
-                    warnings.append("ICO 文件缺少 256x256 尺寸（影响资源管理器大图标显示）")
 
                 if count >= 3 and not missing:
                     self.log("  ✓ ICO 文件验证通过，包含多尺寸图标")

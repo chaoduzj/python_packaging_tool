@@ -17,8 +17,10 @@ import subprocess
 import sys
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
+from core.analyzer_constants import BUILD_DEV_TOOLS as _BUILD_DEV_TOOLS
 from core.packaging.base import CREATE_NO_WINDOW
 from core.packaging.network_utils import NetworkUtils
+from utils.constants import SKIP_DIRECTORIES
 
 
 class DependencyInstaller:
@@ -26,153 +28,433 @@ class DependencyInstaller:
 
     # Python 内置模块和特殊模块映射（不需要或需要特殊处理的模块）
     BUILTIN_MODULES: Set[str] = {
-        'Tkinter', 'tkinter', 'tkFileDialog', 'tkMessageBox', 'tkSimpleDialog',
-        'ScrolledText', 'tkFont', 'tkColorChooser', 'tkCommonDialog',
-        '_tkinter', 'turtle', 'turtledemo',
+        "Tkinter",
+        "tkinter",
+        "tkFileDialog",
+        "tkMessageBox",
+        "tkSimpleDialog",
+        "ScrolledText",
+        "tkFont",
+        "tkColorChooser",
+        "tkCommonDialog",
+        "_tkinter",
+        "turtle",
+        "turtledemo",
         # 其他内置/特殊模块
-        'antigravity', 'this', '__hello__', '__phello__',
+        "antigravity",
+        "this",
+        "__hello__",
+        "__phello__",
     }
 
     # 导入名到 PyPI 包名的映射
     IMPORT_TO_PACKAGE_MAP: Dict[str, str] = {
-        'PIL': 'Pillow',
-        'chardet': 'charset-normalizer',
-        'cv2': 'opencv-python',
-        'skimage': 'scikit-image',
-        'sklearn': 'scikit-learn',
-        'win32api': 'pywin32',
-        'win32com': 'pywin32',
-        'win32con': 'pywin32',
-        'win32file': 'pywin32',
-        'win32gui': 'pywin32',
-        'win32process': 'pywin32',
-        'pywintypes': 'pywin32',
-        'pythoncom': 'pywin32',
-        'yaml': 'pyyaml',
-        'dotenv': 'python-dotenv',
+        "PIL": "Pillow",
+        "chardet": "charset-normalizer",
+        "cv2": "opencv-python",
+        "skimage": "scikit-image",
+        "sklearn": "scikit-learn",
+        "win32api": "pywin32",
+        "win32com": "pywin32",
+        "win32con": "pywin32",
+        "win32file": "pywin32",
+        "win32gui": "pywin32",
+        "win32process": "pywin32",
+        "pywintypes": "pywin32",
+        "pythoncom": "pywin32",
+        "yaml": "pyyaml",
+        "dotenv": "python-dotenv",
         # DNS 相关
-        'dns': 'dnspython',
+        "dns": "dnspython",
         # 其他常见映射
-        'bs4': 'beautifulsoup4',
-        'dateutil': 'python-dateutil',
-        'Crypto': 'pycryptodome',
-        'Cryptodome': 'pycryptodomex',
-        'wx': 'wxPython',
-        'serial': 'pyserial',
-        'usb': 'pyusb',
-        'git': 'GitPython',
-        'magic': 'python-magic',
-        'docx': 'python-docx',
-        'pptx': 'python-pptx',
-        'jwt': 'PyJWT',
-        'jose': 'python-jose',
-        'ldap': 'python-ldap',
-        'ldap3': 'ldap3',
-        'memcache': 'python-memcached',
-        'socks': 'PySocks',
-        'lxml': 'lxml',
-        'attr': 'attrs',
-        'ruamel': 'ruamel.yaml',
-        'fitz': 'PyMuPDF',
-        'telegram': 'python-telegram-bot',
-        'discord': 'discord.py',
-        'flask_cors': 'Flask-Cors',
-        'flask_login': 'Flask-Login',
-        'flask_wtf': 'Flask-WTF',
-        'flask_sqlalchemy': 'Flask-SQLAlchemy',
-        'werkzeug': 'Werkzeug',
-        'jinja2': 'Jinja2',
-        'markupsafe': 'MarkupSafe',
+        "bs4": "beautifulsoup4",
+        "dateutil": "python-dateutil",
+        "Crypto": "pycryptodome",
+        "Cryptodome": "pycryptodomex",
+        "wx": "wxPython",
+        "serial": "pyserial",
+        "usb": "pyusb",
+        "git": "GitPython",
+        "magic": "python-magic",
+        "docx": "python-docx",
+        "pptx": "python-pptx",
+        "jwt": "PyJWT",
+        "jose": "python-jose",
+        "ldap": "python-ldap",
+        "ldap3": "ldap3",
+        "memcache": "python-memcached",
+        "socks": "PySocks",
+        "lxml": "lxml",
+        "attr": "attrs",
+        "ruamel": "ruamel.yaml",
+        "fitz": "PyMuPDF",
+        "telegram": "python-telegram-bot",
+        "discord": "discord.py",
+        "flask_cors": "Flask-Cors",
+        "flask_login": "Flask-Login",
+        "flask_wtf": "Flask-WTF",
+        "flask_sqlalchemy": "Flask-SQLAlchemy",
+        "werkzeug": "Werkzeug",
+        "jinja2": "Jinja2",
+        "markupsafe": "MarkupSafe",
     }
 
     # 已知的不存在于 PyPI 的模块模式（通常是内部模块）
     # 这些模式用于快速过滤，避免尝试从 PyPI 安装
     INTERNAL_MODULE_SUFFIXES: Set[str] = {
         # 常见的内部模块后缀
-        '_worker', '_handler', '_manager', '_helper', '_util', '_utils',
-        '_config', '_settings', '_constants', '_model', '_view', '_controller',
-        '_service', '_client', '_server', '_resolver', '_processor',
-        '_parser', '_builder', '_factory', '_adapter', '_interface',
-        '_log', '_logger', '_cache', '_db', '_database', '_api', '_task',
-        '_window', '_dialog', '_widget', '_panel', '_frame', '_form',
-        '_page', '_screen', '_canvas', '_toolbar', '_menu', '_button',
-        '_loader', '_reader', '_writer', '_exporter', '_importer',
-        '_converter', '_transformer', '_formatter', '_validator',
-        '_connector', '_connection', '_channel', '_socket', '_stream',
-        '_entity', '_domain', '_repository', '_gateway', '_command',
-        '_query', '_event', '_listener', '_subscriber', '_publisher',
-        '_dispatcher', '_router', '_middleware', '_protocol', '_message',
+        "_worker",
+        "_handler",
+        "_manager",
+        "_helper",
+        "_util",
+        "_utils",
+        "_config",
+        "_settings",
+        "_constants",
+        "_model",
+        "_view",
+        "_controller",
+        "_service",
+        "_client",
+        "_server",
+        "_resolver",
+        "_processor",
+        "_parser",
+        "_builder",
+        "_factory",
+        "_adapter",
+        "_interface",
+        "_log",
+        "_logger",
+        "_cache",
+        "_db",
+        "_database",
+        "_api",
+        "_task",
+        "_window",
+        "_dialog",
+        "_widget",
+        "_panel",
+        "_frame",
+        "_form",
+        "_page",
+        "_screen",
+        "_canvas",
+        "_toolbar",
+        "_menu",
+        "_button",
+        "_loader",
+        "_reader",
+        "_writer",
+        "_exporter",
+        "_importer",
+        "_converter",
+        "_transformer",
+        "_formatter",
+        "_validator",
+        "_connector",
+        "_connection",
+        "_channel",
+        "_socket",
+        "_stream",
+        "_entity",
+        "_domain",
+        "_repository",
+        "_gateway",
+        "_command",
+        "_query",
+        "_event",
+        "_listener",
+        "_subscriber",
+        "_publisher",
+        "_dispatcher",
+        "_router",
+        "_middleware",
+        "_protocol",
+        "_message",
     }
 
     # 内部模块命名关键字
     INTERNAL_MODULE_KEYWORDS: Set[str] = {
         # 通用
-        'worker', 'handler', 'manager', 'helper', 'util', 'utils',
-        'config', 'settings', 'constants', 'model', 'view', 'controller',
-        'service', 'client', 'server', 'resolver', 'processor',
-        'parser', 'builder', 'factory', 'adapter', 'interface',
-        'log', 'logger', 'cache', 'db', 'database', 'api', 'task',
+        "worker",
+        "handler",
+        "manager",
+        "helper",
+        "util",
+        "utils",
+        "config",
+        "settings",
+        "constants",
+        "model",
+        "view",
+        "controller",
+        "service",
+        "client",
+        "server",
+        "resolver",
+        "processor",
+        "parser",
+        "builder",
+        "factory",
+        "adapter",
+        "interface",
+        "log",
+        "logger",
+        "cache",
+        "db",
+        "database",
+        "api",
+        "task",
         # GUI 相关
-        'window', 'dialog', 'widget', 'panel', 'frame', 'form',
-        'page', 'screen', 'canvas', 'toolbar', 'menu', 'button',
-        'tab', 'table', 'tree', 'list', 'layout', 'ui',
+        "window",
+        "dialog",
+        "widget",
+        "panel",
+        "frame",
+        "form",
+        "page",
+        "screen",
+        "canvas",
+        "toolbar",
+        "menu",
+        "button",
+        "tab",
+        "table",
+        "tree",
+        "list",
+        "layout",
+        "ui",
         # 项目结构
-        'core', 'lib', 'src', 'app', 'main', 'run', 'start',
-        'test', 'tests', 'spec', 'specs', 'fixture', 'fixtures',
-        'mock', 'mocks', 'stub', 'stubs', 'fake', 'fakes',
+        "core",
+        "lib",
+        "src",
+        "app",
+        "main",
+        "run",
+        "start",
+        "test",
+        "tests",
+        "spec",
+        "specs",
+        "fixture",
+        "fixtures",
+        "mock",
+        "mocks",
+        "stub",
+        "stubs",
+        "fake",
+        "fakes",
         # 数据处理
-        'loader', 'reader', 'writer', 'exporter', 'importer',
-        'converter', 'transformer', 'formatter', 'validator',
-        'serializer', 'deserializer', 'encoder', 'decoder',
+        "loader",
+        "reader",
+        "writer",
+        "exporter",
+        "importer",
+        "converter",
+        "transformer",
+        "formatter",
+        "validator",
+        "serializer",
+        "deserializer",
+        "encoder",
+        "decoder",
         # 网络/通信
-        'connector', 'connection', 'channel', 'socket', 'stream',
-        'protocol', 'message', 'packet', 'request', 'response',
+        "connector",
+        "connection",
+        "channel",
+        "socket",
+        "stream",
+        "protocol",
+        "message",
+        "packet",
+        "request",
+        "response",
         # 业务逻辑
-        'entity', 'domain', 'aggregate', 'repository', 'gateway',
-        'command', 'query', 'event', 'listener', 'subscriber',
-        'publisher', 'dispatcher', 'router', 'middleware',
+        "entity",
+        "domain",
+        "aggregate",
+        "repository",
+        "gateway",
+        "command",
+        "query",
+        "event",
+        "listener",
+        "subscriber",
+        "publisher",
+        "dispatcher",
+        "router",
+        "middleware",
     }
 
     # 常见的本地模块名（项目内部模块）
     LOCAL_MODULE_NAMES: Set[str] = {
-        'ui', 'core', 'config', 'utils', 'lib', 'src', 'gui',
-        'packager', 'dependency_analyzer', 'python_finder',
-        'dependency_manager', 'main_window', 'main', 'app',
-        'models', 'views', 'controllers', 'services', 'helpers',
-        'tests', 'test', 'scripts', 'tools', 'common', 'shared',
+        "ui",
+        "core",
+        "config",
+        "utils",
+        "lib",
+        "src",
+        "gui",
+        "packager",
+        "dependency_analyzer",
+        "python_finder",
+        "dependency_manager",
+        "main_window",
+        "main",
+        "app",
+        "models",
+        "views",
+        "controllers",
+        "services",
+        "helpers",
+        "tests",
+        "test",
+        "scripts",
+        "tools",
+        "common",
+        "shared",
         # 更多常见的内部模块名
-        'worker', 'workers', 'handler', 'handlers', 'resolver', 'resolvers',
-        'processor', 'processors', 'manager', 'managers', 'client', 'clients',
-        'server', 'servers', 'api', 'apis', 'routes', 'middleware',
-        'database', 'db', 'cache', 'task', 'tasks', 'job', 'jobs',
-        'entity', 'entities', 'dto', 'schema', 'schemas', 'interface',
-        'interfaces', 'abstract', 'base', 'bases', 'mixin', 'mixins',
-        'plugin', 'plugins', 'extension', 'extensions', 'module', 'modules',
-        'component', 'components', 'widget', 'widgets', 'dialog', 'dialogs',
-        'panel', 'panels', 'page', 'pages', 'form', 'forms', 'table', 'tables',
-        'resource', 'resources', 'asset', 'assets', 'static', 'template',
-        'templates', 'layout', 'layouts', 'style', 'styles', 'theme', 'themes',
+        "worker",
+        "workers",
+        "handler",
+        "handlers",
+        "resolver",
+        "resolvers",
+        "processor",
+        "processors",
+        "manager",
+        "managers",
+        "client",
+        "clients",
+        "server",
+        "servers",
+        "api",
+        "apis",
+        "routes",
+        "middleware",
+        "database",
+        "db",
+        "cache",
+        "task",
+        "tasks",
+        "job",
+        "jobs",
+        "entity",
+        "entities",
+        "dto",
+        "schema",
+        "schemas",
+        "interface",
+        "interfaces",
+        "abstract",
+        "base",
+        "bases",
+        "mixin",
+        "mixins",
+        "plugin",
+        "plugins",
+        "extension",
+        "extensions",
+        "module",
+        "modules",
+        "component",
+        "components",
+        "widget",
+        "widgets",
+        "dialog",
+        "dialogs",
+        "panel",
+        "panels",
+        "page",
+        "pages",
+        "form",
+        "forms",
+        "table",
+        "tables",
+        "resource",
+        "resources",
+        "asset",
+        "assets",
+        "static",
+        "template",
+        "templates",
+        "layout",
+        "layouts",
+        "style",
+        "styles",
+        "theme",
+        "themes",
         # 网络/通信
-        'connector', 'connectors', 'channel', 'channels', 'protocol', 'protocols',
-        'message', 'messages', 'packet', 'packets', 'stream', 'streams',
+        "connector",
+        "connectors",
+        "channel",
+        "channels",
+        "protocol",
+        "protocols",
+        "message",
+        "messages",
+        "packet",
+        "packets",
+        "stream",
+        "streams",
         # 业务逻辑
-        'domain', 'domains', 'aggregate', 'aggregates', 'repository', 'repositories',
-        'gateway', 'gateways', 'command', 'commands', 'query', 'queries',
-        'event', 'events', 'listener', 'listeners', 'subscriber', 'subscribers',
-        'publisher', 'publishers', 'dispatcher', 'dispatchers', 'router', 'routers',
+        "domain",
+        "domains",
+        "aggregate",
+        "aggregates",
+        "repository",
+        "repositories",
+        "gateway",
+        "gateways",
+        "command",
+        "commands",
+        "query",
+        "queries",
+        "event",
+        "events",
+        "listener",
+        "listeners",
+        "subscriber",
+        "subscribers",
+        "publisher",
+        "publishers",
+        "dispatcher",
+        "dispatchers",
+        "router",
+        "routers",
         # 数据处理
-        'loader', 'loaders', 'reader', 'readers', 'writer', 'writers',
-        'exporter', 'exporters', 'importer', 'importers', 'converter', 'converters',
-        'transformer', 'transformers', 'formatter', 'formatters', 'validator', 'validators',
-        'serializer', 'serializers', 'encoder', 'encoders', 'decoder', 'decoders',
+        "loader",
+        "loaders",
+        "reader",
+        "readers",
+        "writer",
+        "writers",
+        "exporter",
+        "exporters",
+        "importer",
+        "importers",
+        "converter",
+        "converters",
+        "transformer",
+        "transformers",
+        "formatter",
+        "formatters",
+        "validator",
+        "validators",
+        "serializer",
+        "serializers",
+        "encoder",
+        "encoders",
+        "decoder",
+        "decoders",
     }
 
-    # 需要跳过的目录
-    SKIP_DIRS: Set[str] = {
-        '.venv', 'venv', 'build', 'dist', '__pycache__', '.git',
-        'node_modules', 'site-packages', '.tox', '.pytest_cache',
-        'egg-info', '.eggs', '.mypy_cache', '.ruff_cache',
-        '.idea', '.vscode', '.vs', 'htmlcov', 'coverage',
+    # 需要跳过的目录（基于 utils.constants.SKIP_DIRECTORIES 扩展）
+    SKIP_DIRS: Set[str] = set(SKIP_DIRECTORIES) | {
+        ".tox", ".pytest_cache", "egg-info", ".eggs",
+        ".mypy_cache", ".ruff_cache", ".vs", "htmlcov", "coverage",
     }
 
     # PyPI 包验证缓存
@@ -221,8 +503,8 @@ class DependencyInstaller:
                 return True
 
         # 检查是否包含下划线且看起来像内部模块
-        if '_' in name:
-            parts = name.split('_')
+        if "_" in name:
+            parts = name.split("_")
             # 如果包含多个部分且看起来像描述性命名，可能是内部模块
             if any(part.lower() in self.INTERNAL_MODULE_KEYWORDS for part in parts):
                 return True
@@ -233,17 +515,49 @@ class DependencyInstaller:
             # 统计大写字母数量
             upper_count = sum(1 for c in name if c.isupper())
             # 如果有多个大写字母且没有下划线/连字符，可能是内部模块
-            if upper_count >= 2 and '_' not in name and '-' not in name:
+            if upper_count >= 2 and "_" not in name and "-" not in name:
                 # 常见的内部模块后缀
                 internal_suffixes = (
-                    'Nodes', 'Codes', 'Helpers', 'Generated', 'Specs',
-                    'Definitions', 'Bases', 'Utils', 'Mixin', 'Base',
-                    'Handler', 'Manager', 'Factory', 'Builder', 'Visitor',
-                    'Parser', 'Lexer', 'Analyzer', 'Optimizer', 'Generator',
-                    'Transformer', 'Processor', 'Worker', 'Runner', 'Loader',
-                    'Service', 'Controller', 'Model', 'View', 'Schema',
-                    'Serializer', 'Validator', 'Exception', 'Error', 'Config',
-                    'Client', 'Server', 'Provider', 'Consumer', 'Adapter',
+                    "Nodes",
+                    "Codes",
+                    "Helpers",
+                    "Generated",
+                    "Specs",
+                    "Definitions",
+                    "Bases",
+                    "Utils",
+                    "Mixin",
+                    "Base",
+                    "Handler",
+                    "Manager",
+                    "Factory",
+                    "Builder",
+                    "Visitor",
+                    "Parser",
+                    "Lexer",
+                    "Analyzer",
+                    "Optimizer",
+                    "Generator",
+                    "Transformer",
+                    "Processor",
+                    "Worker",
+                    "Runner",
+                    "Loader",
+                    "Service",
+                    "Controller",
+                    "Model",
+                    "View",
+                    "Schema",
+                    "Serializer",
+                    "Validator",
+                    "Exception",
+                    "Error",
+                    "Config",
+                    "Client",
+                    "Server",
+                    "Provider",
+                    "Consumer",
+                    "Adapter",
                 )
                 if any(name.endswith(suffix) for suffix in internal_suffixes):
                     return True
@@ -280,26 +594,28 @@ class DependencyInstaller:
         try:
             # 使用 pip index versions 检查包是否存在（pip 21.2+）
             result = subprocess.run(
-                [python_path, '-m', 'pip', 'index', 'versions', package_name],
+                [python_path, "-m", "pip", "index", "versions", package_name],
                 capture_output=True,
                 text=True,
                 timeout=10,
-                creationflags=CREATE_NO_WINDOW
+                creationflags=CREATE_NO_WINDOW,
             )
 
             # 如果命令成功执行且有输出，说明包存在
-            exists = result.returncode == 0 and package_name.lower() in result.stdout.lower()
+            exists = (
+                result.returncode == 0 and package_name.lower() in result.stdout.lower()
+            )
 
             # 如果 pip index 不可用，尝试使用 pip show（检查本地安装）
             # 或者 pip download --no-deps --no-cache-dir -d tempdir（不推荐，太慢）
-            if not exists and 'no such command' in result.stderr.lower():
+            if not exists and "no such command" in result.stderr.lower():
                 # 回退到检查本地是否已安装
                 result = subprocess.run(
-                    [python_path, '-m', 'pip', 'show', package_name],
+                    [python_path, "-m", "pip", "show", package_name],
                     capture_output=True,
                     text=True,
                     timeout=10,
-                    creationflags=CREATE_NO_WINDOW
+                    creationflags=CREATE_NO_WINDOW,
                 )
                 exists = result.returncode == 0
 
@@ -314,8 +630,10 @@ class DependencyInstaller:
             return True
 
     def _collect_project_modules_recursive(
-        self, project_dir: str, collected: Optional[Set[str]] = None,
-        module_paths: Optional[Set[str]] = None
+        self,
+        project_dir: str,
+        collected: Optional[Set[str]] = None,
+        module_paths: Optional[Set[str]] = None,
     ) -> Tuple[Set[str], Set[str]]:
         """
         递归收集项目目录下的所有 Python 模块名
@@ -335,10 +653,10 @@ class DependencyInstaller:
 
         try:
             for item in os.listdir(project_dir):
-                if item.startswith('.') or item in self.SKIP_DIRS:
+                if item.startswith(".") or item in self.SKIP_DIRS:
                     continue
                 # 跳过包含 egg-info 的目录
-                if 'egg-info' in item or item.endswith('.egg'):
+                if "egg-info" in item or item.endswith(".egg"):
                     continue
 
                 item_path = os.path.join(project_dir, item)
@@ -353,12 +671,14 @@ class DependencyInstaller:
                         collected.add(item)
                         module_paths.add(item)
                         # 递归收集子模块
-                        self._collect_submodules_recursive(item_path, item, collected, module_paths)
+                        self._collect_submodules_recursive(
+                            item_path, item, collected, module_paths
+                        )
                     # 或者是常见的项目目录名
                     elif item in self.LOCAL_MODULE_NAMES:
                         collected.add(item)
 
-                elif item.endswith('.py') and item != '__init__.py':
+                elif item.endswith(".py") and item != "__init__.py":
                     # 单个 Python 文件也是模块
                     module_name = item[:-3]
                     collected.add(module_name)
@@ -373,15 +693,20 @@ class DependencyInstaller:
         """检查目录是否包含 Python 文件"""
         try:
             for item in os.listdir(dir_path):
-                if item.endswith('.py') and os.path.isfile(os.path.join(dir_path, item)):
+                if item.endswith(".py") and os.path.isfile(
+                    os.path.join(dir_path, item)
+                ):
                     return True
         except Exception:
             pass
         return False
 
     def _collect_submodules_recursive(
-        self, dir_path: str, parent_module: str, collected: Set[str],
-        module_paths: Set[str]
+        self,
+        dir_path: str,
+        parent_module: str,
+        collected: Set[str],
+        module_paths: Set[str],
     ) -> None:
         """
         递归收集子模块
@@ -394,9 +719,9 @@ class DependencyInstaller:
         """
         try:
             for item in os.listdir(dir_path):
-                if item.startswith('.') or item in self.SKIP_DIRS:
+                if item.startswith(".") or item in self.SKIP_DIRS:
                     continue
-                if 'egg-info' in item or item.endswith('.egg'):
+                if "egg-info" in item or item.endswith(".egg"):
                     continue
 
                 item_path = os.path.join(dir_path, item)
@@ -413,9 +738,11 @@ class DependencyInstaller:
                         full_path = f"{parent_module}.{item}"
                         module_paths.add(full_path)
                         # 递归
-                        self._collect_submodules_recursive(item_path, full_path, collected, module_paths)
+                        self._collect_submodules_recursive(
+                            item_path, full_path, collected, module_paths
+                        )
 
-                elif item.endswith('.py') and item != '__init__.py':
+                elif item.endswith(".py") and item != "__init__.py":
                     module_name = item[:-3]
                     collected.add(module_name)
                     module_paths.add(f"{parent_module}.{module_name}")
@@ -438,7 +765,7 @@ class DependencyInstaller:
             return False
 
         # 将模块名转换为可能的路径
-        module_parts = module_name.split('.')
+        module_parts = module_name.split(".")
         base_name = module_parts[0]
 
         # 检查各种可能的路径
@@ -446,9 +773,9 @@ class DependencyInstaller:
             # 作为目录（包）
             os.path.join(project_dir, base_name),
             # 作为 .py 文件
-            os.path.join(project_dir, base_name + '.py'),
+            os.path.join(project_dir, base_name + ".py"),
             # 作为包的 __init__.py
-            os.path.join(project_dir, base_name, '__init__.py'),
+            os.path.join(project_dir, base_name, "__init__.py"),
         ]
 
         for path in possible_paths:
@@ -458,12 +785,16 @@ class DependencyInstaller:
         # 如果有子模块路径，检查完整路径
         if len(module_parts) > 1:
             full_path = os.path.join(project_dir, *module_parts)
-            if os.path.exists(full_path) or os.path.exists(full_path + '.py'):
+            if os.path.exists(full_path) or os.path.exists(full_path + ".py"):
                 return True
-            if os.path.exists(os.path.join(full_path, '__init__.py')):
+            if os.path.exists(os.path.join(full_path, "__init__.py")):
                 return True
 
         return False
+
+    # 已知的打包/构建/代码分析工具，不应作为依赖被安装
+    # 来自 core.analyzer_constants 的单一来源定义
+    BUILD_DEV_TOOLS: Set[str] = set(_BUILD_DEV_TOOLS)
 
     def filter_dependencies(
         self,
@@ -492,7 +823,9 @@ class DependencyInstaller:
 
         # 递归收集项目目录中的所有本地模块
         if project_dir:
-            collected_modules, collected_paths = self._collect_project_modules_recursive(project_dir)
+            collected_modules, collected_paths = (
+                self._collect_project_modules_recursive(project_dir)
+            )
             local_modules.update(collected_modules)
             module_paths.update(collected_paths)
 
@@ -514,6 +847,12 @@ class DependencyInstaller:
                 skipped_builtin += 1
                 continue
 
+            # 跳过已知的打包/构建/分析工具
+            if dep.lower() in {t.lower() for t in self.BUILD_DEV_TOOLS}:
+                self.log(f"跳过打包/构建工具: {dep}")
+                skipped_local += 1
+                continue
+
             # 跳过已知的本地模块名
             if dep in self.LOCAL_MODULE_NAMES:
                 skipped_local += 1
@@ -532,7 +871,7 @@ class DependencyInstaller:
             # 检查是否是某个模块路径的一部分
             is_path_match = False
             for path in module_paths:
-                if path.startswith(dep + '.') or path.endswith('.' + dep):
+                if path.startswith(dep + ".") or path.endswith("." + dep):
                     is_path_match = True
                     break
             if is_path_match:
@@ -582,6 +921,7 @@ class DependencyInstaller:
 
         # 验证 Python 解释器路径
         import os
+
         if not os.path.exists(python_path):
             self.log("错误: Python 解释器不存在，无法安装依赖")
             self.log(f"  路径: {python_path}")
@@ -644,7 +984,9 @@ class DependencyInstaller:
         need_install_count = len(packages_need_install)
 
         if installed_count > 0 and need_install_count > 0:
-            self.log(f"依赖检查: {total_count} 个依赖包，{installed_count} 个已安装，{need_install_count} 个需要安装")
+            self.log(
+                f"依赖检查: {total_count} 个依赖包，{installed_count} 个已安装，{need_install_count} 个需要安装"
+            )
         elif installed_count > 0:
             self.log(f"✓ 所有 {total_count} 个依赖包均已安装")
             return
@@ -675,7 +1017,7 @@ class DependencyInstaller:
                 self.log("安装依赖已取消")
                 return
 
-            import_display = ', '.join(import_names)
+            import_display = ", ".join(import_names)
 
             # 构建显示名称
             if install_name != import_display and len(import_names) == 1:
@@ -688,8 +1030,8 @@ class DependencyInstaller:
             try:
                 # 特殊处理：PyQt5 需要同时安装 PyQt5-Qt5 以获取完整的插件
                 packages = [install_name]
-                if install_name == 'PyQt5':
-                    packages.append('PyQt5-Qt5')
+                if install_name == "PyQt5":
+                    packages.append("PyQt5-Qt5")
 
                 all_success = True
                 for pkg in packages:

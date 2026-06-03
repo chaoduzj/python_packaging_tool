@@ -9,7 +9,7 @@
 - 根据检测到的依赖生成隐藏导入列表
 - 支持各种常用库的隐藏导入配置
 - 支持 GUI 框架的隐藏导入
-- 支持未配置库的通用策略
+- 支持第三方库的自动分析（未命中加速缓存的库）
 """
 
 from typing import Callable, Dict, List, Optional, Set
@@ -38,7 +38,7 @@ class HiddenImportsManager:
         self.log: Callable = print
         self._dynamic_imports: Set[str] = set()
         self._auto_collected_modules: Dict[str, List[str]] = {}
-        self._unconfigured_libraries: Set[str] = set()
+        self._auto_analyzed_libraries: Set[str] = set()
 
     def set_log_callback(self, callback: Callable) -> None:
         """设置日志回调函数"""
@@ -52,9 +52,9 @@ class HiddenImportsManager:
         """设置自动收集的子模块"""
         self._auto_collected_modules = modules
 
-    def get_unconfigured_libraries(self) -> Set[str]:
-        """获取未配置的库列表"""
-        return self._unconfigured_libraries.copy()
+    def get_auto_analyzed_libraries(self) -> Set[str]:
+        """获取自动分析的第三方库列表（未命中加速缓存的库）"""
+        return self._auto_analyzed_libraries.copy()
 
     def get_hidden_imports(
         self,
@@ -154,8 +154,8 @@ class HiddenImportsManager:
             self.log(f"\n添加动态追踪到的 {len(self._dynamic_imports)} 个导入...")
             hidden.extend(list(self._dynamic_imports))
 
-        # ========== 第二层：通用库自动支持 ==========
-        hidden.extend(self._get_unconfigured_libs_hidden_imports(
+        # ========== 第二层：第三方库自动分析 ==========
+        hidden.extend(self._get_third_party_hidden_imports(
             dependencies, hidden, is_real_package_func, is_stdlib_func
         ))
 
@@ -1965,6 +1965,18 @@ class HiddenImportsManager:
         """获取系统交互相关的隐藏导入"""
         hidden = []
 
+        # psutil 相关（来源: https://pypi.org/project/psutil/）
+        # psutil 在导入时按平台动态加载 _ps<platform> 后端模块，
+        # 静态分析无法检测，需显式声明。打包工具会自动只保留当前平台需要的。
+        if "psutil" in dependencies:
+            hidden.extend([
+                "psutil",
+                "psutil._common",
+                "psutil._compat",
+                "psutil._pswindows",  # Windows 平台后端
+                "psutil._psutil_windows",  # Windows C 扩展
+            ])
+
         # pywin32 相关
         if any(dep in dependencies for dep in ["win32api", "win32com", "win32gui", "win32process", "pywin32"]):
             hidden.extend([
@@ -2023,35 +2035,42 @@ class HiddenImportsManager:
 
         return hidden
 
-    def _get_unconfigured_libs_hidden_imports(
+    def _get_third_party_hidden_imports(
         self,
         dependencies: Set[str],
         hidden: List[str],
         is_real_package_func: Optional[Callable[[str], bool]],
         is_stdlib_func: Optional[Callable[[str], bool]],
     ) -> List[str]:
-        """获取未配置库的隐藏导入（通用策略）"""
+        """获取第三方库的隐藏导入（未命中加速缓存的库，通用策略）"""
         result = []
 
-        # 处理未在已知配置列表中的库
+        # 处理未命中加速缓存的第三方库
         # 使用字典来合并 PyPI 包名和导入名（如 dns 和 dnspython 都映射到 dns）
-        unconfigured_modules: Dict[str, str] = {}  # module_name -> original_dep
+        third_party_modules: Dict[str, str] = {}  # module_name -> original_dep
         seen_modules: Set[str] = set()
+
+        # 已知的打包/构建/代码分析工具，不应生成隐藏导入
+        from core.analyzer_constants import BUILD_DEV_TOOLS
 
         for dep in dependencies:
             # 跳过标准库
             if is_stdlib_func and is_stdlib_func(dep):
                 continue
 
+            # 跳过已知的打包/构建工具
+            if dep.lower() in {t.lower() for t in BUILD_DEV_TOOLS}:
+                continue
+
             # 将 PyPI 包名转换为实际模块名（用于后续检查）
             module_name = self.PACKAGE_TO_MODULE_MAPPING.get(dep, dep)
 
-            # 检查是否已配置（检查多种可能的名称形式）
+            # 检查是否命中加速缓存（检查多种可能的名称形式）
             dep_lower = dep.lower()
             dep_normalized = dep.replace('-', '_').replace('.', '_')
             module_lower = module_name.lower()
 
-            is_configured = (
+            is_cached = (
                 dep in CONFIGURED_LIBRARIES or
                 dep_lower in {lib.lower() for lib in CONFIGURED_LIBRARIES} or
                 dep_normalized in CONFIGURED_LIBRARIES or
@@ -2067,17 +2086,17 @@ class HiddenImportsManager:
                 any(h.lower() == module_lower for h in hidden)
             )
 
-            if not is_configured and not has_hidden:
+            if not is_cached and not has_hidden:
                 # 使用模块名作为键，避免重复处理（如 dns 和 dnspython 都映射到 dns）
                 if module_name not in seen_modules:
                     seen_modules.add(module_name)
-                    unconfigured_modules[module_name] = dep
+                    third_party_modules[module_name] = dep
 
-        # 对未配置的库使用通用策略
-        if unconfigured_modules:
-            self.log(f"\n检测到 {len(unconfigured_modules)} 个未配置的库，使用通用策略:")
-            for module_name, original_dep in sorted(unconfigured_modules.items()):
-                self._unconfigured_libraries.add(module_name)
+        # 对需要自动处理的库，分析和生成隐藏导入
+        if third_party_modules:
+            self.log(f"\n自动处理 {len(third_party_modules)} 个第三方库的隐藏导入:")
+            for module_name, original_dep in sorted(third_party_modules.items()):
+                self._auto_analyzed_libraries.add(module_name)
 
                 # 添加库本身（使用正确的模块名）
                 result.append(module_name)
@@ -2091,16 +2110,16 @@ class HiddenImportsManager:
                 display_name = f"{original_dep} -> {module_name}" if original_dep != module_name else module_name
 
                 if is_package:
-                    self.log(f"  ⚠️ {display_name} (包)")
+                    self.log(f"  {display_name} (包)")
                     # 如果已经自动收集了子模块，使用它们
                     if module_name in self._auto_collected_modules:
                         submodules = self._auto_collected_modules[module_name]
                         result.extend(submodules)
-                        self.log(f"     已使用自动收集的 {len(submodules)} 个子模块")
+                        self.log(f"     已使用自动分析的 {len(submodules)} 个子模块")
                     elif original_dep in self._auto_collected_modules:
                         submodules = self._auto_collected_modules[original_dep]
                         result.extend(submodules)
-                        self.log(f"     已使用自动收集的 {len(submodules)} 个子模块")
+                        self.log(f"     已使用自动分析的 {len(submodules)} 个子模块")
                     else:
                         # 添加常见子模块模式（使用正确的模块名）
                         common_patterns = [
@@ -2120,6 +2139,6 @@ class HiddenImportsManager:
                         self.log("     使用常见模式策略（11个常见子模块）")
                 else:
                     # 单文件模块，不需要添加子模块
-                    self.log(f"  ⚠️ {display_name} (单文件模块)")
+                    self.log(f"  {display_name} (单文件模块)")
 
         return result

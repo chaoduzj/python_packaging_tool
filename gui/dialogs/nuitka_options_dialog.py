@@ -293,8 +293,8 @@ class NuitkaOptionsDialog(QDialog):
             "deployment": True,               # 部署模式（默认启用）
 
             # Onefile 配置
-            "onefile_tempdir_spec": "{CACHE_DIR}/{COMPANY}/{PRODUCT}/{VERSION}",  # 默认使用缓存目录
-            "onefile_use_cache": True,        # 使用缓存目录（默认启用）
+            "onefile_tempdir_spec": "{TEMP}/onefile_{PID}_{TIME}",  # 默认使用安全的临时目录
+            "onefile_use_cache": False,       # 默认不使用缓存目录
 
             # 编译报告
             "generate_report": False,         # 生成编译报告
@@ -703,7 +703,16 @@ class NuitkaOptionsDialog(QDialog):
         """当使用缓存目录选项改变时"""
         is_checked = state == Qt.CheckState.Checked.value
         if is_checked:
+            # 使用缓存目录（需要配置版本信息）
             self.tempdir_spec_edit.setText("{CACHE_DIR}/{COMPANY}/{PRODUCT}/{VERSION}")
+            self.tempdir_spec_edit.setToolTip(
+                "注意：使用此路径需要在主界面勾选\"EXE版本信息\"\n"
+                "并配置公司名、产品名和版本号，否则打包将使用默认属性。\n\n"
+                + self.tempdir_spec_edit.toolTip()
+            )
+        else:
+            # 回退到安全的临时目录
+            self.tempdir_spec_edit.setText("{TEMP}/onefile_{PID}_{TIME}")
         self.tempdir_spec_edit.setEnabled(not is_checked)
 
     def _on_generate_report_changed(self, state: int) -> None:
@@ -740,9 +749,9 @@ class NuitkaOptionsDialog(QDialog):
         self.deployment_check.setChecked(self.options.get("deployment", True))
 
         # Onefile 配置
-        use_cache = self.options.get("onefile_use_cache", True)
+        use_cache = self.options.get("onefile_use_cache", False)
         self.use_cache_check.setChecked(use_cache)
-        self.tempdir_spec_edit.setText(self.options.get("onefile_tempdir_spec", "{CACHE_DIR}/{COMPANY}/{PRODUCT}/{VERSION}"))
+        self.tempdir_spec_edit.setText(self.options.get("onefile_tempdir_spec", "{TEMP}/onefile_{PID}_{TIME}"))
         self.tempdir_spec_edit.setEnabled(not use_cache)
 
         # 编译报告

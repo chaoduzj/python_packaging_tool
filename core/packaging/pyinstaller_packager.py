@@ -60,6 +60,7 @@ class PyInstallerPackager(BasePackager):
             命令行参数列表
         """
         script_path = config["script_path"]
+        project_dir = config.get("project_dir") or os.path.dirname(os.path.abspath(script_path))
 
         cmd = [
             python_path,
@@ -70,25 +71,14 @@ class PyInstallerPackager(BasePackager):
             f"--distpath={output_dir}",
             f"--workpath={os.path.join(output_dir, 'build')}",
             f"--specpath={output_dir}",
+            # 将项目根目录加入 PyInstaller 的模块搜索路径，
+            # 确保 utils/、managers/、app/、ui/ 等本地包能被正确收集
+            f"--paths={project_dir}",
         ]
 
         # 单文件模式
         if config.get("onefile", True):
             cmd.append("--onefile")
-
-            # 创建并添加运行时 hook，用于切换工作目录到解压目录
-            # 这使得相对路径资源加载（如图标）像在源码运行或 Nuitka 中一样工作
-            try:
-                hook_path = os.path.join(output_dir, "rthook_chdir.py")
-                os.makedirs(output_dir, exist_ok=True)
-                with open(hook_path, "w", encoding="utf-8") as f:
-                    f.write("import sys\n")
-                    f.write("import os\n")
-                    f.write("if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):\n")
-                    f.write("    os.chdir(sys._MEIPASS)\n")
-                cmd.append(f"--runtime-hook={hook_path}")
-            except Exception:
-                pass
         else:
             cmd.append("--onedir")
 
@@ -145,6 +135,29 @@ class PyInstallerPackager(BasePackager):
                         cmd.append(f"--add-data={std_ico_path}{separator}.")
                     except Exception:
                         pass
+
+        # 自动收集项目本地包的所有子模块
+        # --collect-submodules 用于常规包（有 __init__.py），
+        # 对无 __init__.py 的命名空间包，改用 --hidden-import 逐个收集
+        local_packages = self._get_local_packages(project_dir)
+        for pkg in local_packages:
+            pkg_path = os.path.join(project_dir, pkg)
+            init_file = os.path.join(pkg_path, "__init__.py")
+            if os.path.isfile(init_file):
+                # 常规包：使用 collect-submodules
+                cmd.append(f"--collect-submodules={pkg}")
+            else:
+                # 命名空间包（无 __init__.py）：逐个 hidden-import 所有 .py 模块
+                # PyInstaller 的 collect-submodules 对无 __init__.py 的包不可靠
+                pkg_name = pkg  # 目录名即为包名
+                cmd.append(f"--hidden-import={pkg_name}")
+                try:
+                    for sub_entry in os.scandir(pkg_path):
+                        if sub_entry.is_file() and sub_entry.name.endswith(".py") and not sub_entry.name.startswith("_"):
+                            mod = f"{pkg_name}.{sub_entry.name[:-3]}"
+                            cmd.append(f"--hidden-import={mod}")
+                except Exception:
+                    pass
 
         # 隐藏导入
         for hidden in hidden_imports:
@@ -228,6 +241,9 @@ class PyInstallerPackager(BasePackager):
 
         try:
             # 执行打包
+            # 清除 PYTHONPATH 中的打包工具路径，避免打包工具的模块被误导入
+            env = os.environ.copy()
+            env.pop("PYTHONPATH", None)
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -235,6 +251,7 @@ class PyInstallerPackager(BasePackager):
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                env=env,
                 creationflags=CREATE_NO_WINDOW if sys.platform == "win32" else 0,
             )
 
@@ -263,6 +280,48 @@ class PyInstallerPackager(BasePackager):
 
         except Exception as e:
             return False, f"执行 PyInstaller 时出错: {str(e)}"
+
+    def _get_local_packages(self, project_dir: str) -> List[str]:
+        """
+        扫描项目根目录，返回所有顶层本地包名。
+
+        包括：
+        - 有 __init__.py 的常规 Python 包（可通过 --collect-submodules 收集）
+        - 无 __init__.py 但包含 .py 文件的命名空间包
+          （PyInstaller 需要 --hidden-import 逐个收集子模块）
+
+        跳过虚拟环境、构建目录等无关目录。
+        """
+        from utils.constants import SKIP_DIRECTORIES
+
+        skip_dirs = set(SKIP_DIRECTORIES) | {
+            ".github", ".tox", ".mypy_cache", "logs", "output",
+        }
+        packages: List[str] = []
+        try:
+            for entry in os.scandir(project_dir):
+                if not entry.is_dir():
+                    continue
+                if entry.name in skip_dirs or entry.name.startswith("."):
+                    continue
+                init_file = os.path.join(entry.path, "__init__.py")
+                if os.path.isfile(init_file):
+                    packages.append(entry.name)
+                    continue
+                # 无 __init__.py 但包含 .py 文件：视为命名空间包
+                # 仍需加入 packages 列表以便自动收集其子模块
+                try:
+                    has_py = any(
+                        e.is_file() and e.name.endswith(".py")
+                        for e in os.scandir(entry.path)
+                    )
+                    if has_py:
+                        packages.append(entry.name)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return packages
 
     def _find_output_exe(
         self,
@@ -316,7 +375,7 @@ class PyInstallerPackager(BasePackager):
             (运行成功, 缺失的模块集合)
         """
         self.log("\n" + "=" * 50)
-        self.log("第三层防护：打包后自动测试")
+        self.log("依赖分析阶段 3/3：打包后自动测试")
         self.log("=" * 50)
         self.log(f"测试运行: {exe_path}")
 

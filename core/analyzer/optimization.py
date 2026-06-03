@@ -58,18 +58,39 @@ class OptimizationAdvisor:
                     exclude_list.append(submodule)
 
         # 3. 添加常见的测试和文档模块
-        exclude_list.extend([
-            "test",
-            "tests",
-            "testing",
-            "*.tests",
-            "*.test",
-            "*_test",
-            "*_tests",
-            "setuptools",
-            "pip",
-            "wheel",
-        ])
+        exclude_list.extend(
+            [
+                "test",
+                "tests",
+                "testing",
+                "*.tests",
+                "*.test",
+                "*_test",
+                "*_tests",
+                "setuptools",
+                "pip",
+                "wheel",
+            ]
+        )
+
+        # 4. 排除已知的打包/构建/代码分析工具
+        #    这些工具不应被打包进目标程序的 exe 中
+        from core.analyzer_constants import BUILD_DEV_TOOLS
+        for dep in dependencies:
+            if dep.lower() in {t.lower() for t in BUILD_DEV_TOOLS}:
+                exclude_list.append(dep)
+                self.excluded_modules.add(dep)
+
+        # 5. 排除跨平台库在当前平台不需要的后端模块（按需打包，减小 exe 体积）
+        from core.analyzer_constants import PLATFORM_SPECIFIC_MODULES
+
+        if sys.platform == "win32":
+            for dep in dependencies:
+                spec = PLATFORM_SPECIFIC_MODULES.get(dep)
+                if spec and "exclude_on_win32" in spec:
+                    for mod in spec["exclude_on_win32"]:
+                        exclude_list.append(mod)
+                        self.excluded_modules.add(mod)
 
         return list(set(exclude_list))
 
@@ -323,11 +344,14 @@ print("__SUBMODULES_END__")
 
             stdout = result.stdout
             if "__SUBMODULES_START__" in stdout and "__SUBMODULES_END__" in stdout:
-                start = stdout.index("__SUBMODULES_START__") + len("__SUBMODULES_START__")
+                start = stdout.index("__SUBMODULES_START__") + len(
+                    "__SUBMODULES_START__"
+                )
                 end = stdout.index("__SUBMODULES_END__")
                 submodules_json = stdout[start:end].strip()
 
                 import json
+
                 submodules = json.loads(submodules_json)
                 return submodules
 
@@ -337,7 +361,7 @@ print("__SUBMODULES_END__")
         # 失败时返回基本模块
         return [package_name]
 
-    def collect_all_unconfigured_submodules(
+    def collect_third_party_submodules(
         self,
         dependencies: Set[str],
         python_path: str,
@@ -345,75 +369,75 @@ print("__SUBMODULES_END__")
         is_stdlib_func: Callable[[str], bool],
     ) -> Dict[str, List[str]]:
         """
-        收集所有未配置库的子模块
+        自动分析第三方库的子模块（未命中加速缓存的库）
 
         Args:
             dependencies: 依赖包集合
             python_path: Python解释器路径
-            configured_libraries: 已配置的库集合
+            configured_libraries: 已配置的库集合（加速缓存）
             is_stdlib_func: 检测模块是否是标准库的函数
 
         Returns:
-            未配置库的子模块字典
+            第三方库的子模块字典
         """
         self.log("\n" + "=" * 50)
-        self.log("第二层防护：自动收集子模块")
+        self.log("依赖分析阶段 2/3：自动分析第三方库子模块")
         self.log("=" * 50)
 
         auto_collected_modules: Dict[str, List[str]] = {}
 
-        # PyPI 包名到导入名的映射
-        package_to_module: Dict[str, str] = {
-            'dnspython': 'dns',
-            'pillow': 'PIL',
-            'beautifulsoup4': 'bs4',
-            'pyyaml': 'yaml',
-            'python-dateutil': 'dateutil',
-            'opencv-python': 'cv2',
-            'opencv-contrib-python': 'cv2',
-            'scikit-learn': 'sklearn',
-            'scikit-image': 'skimage',
-            'pywin32': 'win32api',
-            'python-dotenv': 'dotenv',
-            'PyMuPDF': 'fitz',
-        }
+        # 使用统一的 PACKAGE_IMPORT_MAP（来自 analyzer_constants）
+        from core.analyzer_constants import PACKAGE_IMPORT_MAP
 
-        # 收集未配置的库，同时合并 PyPI 包名和导入名
-        unconfigured_modules: Dict[str, str] = {}  # module_name -> original_dep
+        package_to_module = dict(PACKAGE_IMPORT_MAP)
+
+        # 收集未命中缓存的第三方库，同时合并 PyPI 包名和导入名
+        third_party_modules: Dict[str, str] = {}  # module_name -> original_dep
         seen_modules: Set[str] = set()
+
+        # 已知的打包/构建/代码分析工具，不应被自动收集子模块
+        from core.analyzer_constants import BUILD_DEV_TOOLS
 
         for dep in dependencies:
             if is_stdlib_func(dep):
                 continue
 
+            # 跳过已知的打包/构建工具
+            if dep.lower() in {t.lower() for t in BUILD_DEV_TOOLS}:
+                continue
+
             # 获取实际的模块名
             module_name = package_to_module.get(dep, dep)
 
-            # 检查是否已配置
+            # 检查是否命中加速缓存
             dep_lower = dep.lower()
             module_lower = module_name.lower()
-            is_configured = (
-                dep in configured_libraries or
-                dep_lower in {lib.lower() for lib in configured_libraries} or
-                module_name in configured_libraries or
-                module_lower in {lib.lower() for lib in configured_libraries}
+            is_cached = (
+                dep in configured_libraries
+                or dep_lower in {lib.lower() for lib in configured_libraries}
+                or module_name in configured_libraries
+                or module_lower in {lib.lower() for lib in configured_libraries}
             )
 
-            if not is_configured:
+            if not is_cached:
                 # 使用模块名作为键，避免重复（如 dns 和 dnspython 都映射到 dns）
                 if module_name not in seen_modules:
                     seen_modules.add(module_name)
-                    unconfigured_modules[module_name] = dep
+                    third_party_modules[module_name] = dep
 
-        if not unconfigured_modules:
-            self.log("所有依赖都已有配置，无需自动收集")
+        if not third_party_modules:
+            self.log("所有第三方库均已有缓存配置，跳过自动分析")
             return auto_collected_modules
 
-        self.log(f"发现 {len(unconfigured_modules)} 个未配置的库，开始自动收集子模块:")
+        self.log(f"自动分析 {len(third_party_modules)} 个第三方库的子模块:")
 
-        for module_name, original_dep in unconfigured_modules.items():
-            display_name = f"{original_dep} ({module_name})" if original_dep != module_name else module_name
-            self.log(f"\n  收集 {display_name} 的子模块...")
+        for module_name, original_dep in third_party_modules.items():
+            display_name = (
+                f"{original_dep} ({module_name})"
+                if original_dep != module_name
+                else module_name
+            )
+            self.log(f"\n  分析 {display_name} 的子模块...")
             submodules = self.auto_collect_submodules(module_name, python_path)
 
             # 无论是否为单文件模块，都存储结果，避免 fallthrough 到 common patterns
@@ -421,8 +445,8 @@ print("__SUBMODULES_END__")
             if original_dep != module_name:
                 auto_collected_modules[original_dep] = submodules
             if len(submodules) > 1:
-                self.log(f"    ✓ 收集到 {len(submodules)} 个子模块")
+                self.log(f"    ✓ 分析到 {len(submodules)} 个子模块")
             else:
-                self.log("    ✓ 单文件模块，仅包含基础模块")
+                self.log("    ✓ 单文件模块，直接包含")
 
         return auto_collected_modules

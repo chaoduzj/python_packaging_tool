@@ -205,6 +205,8 @@ class BasePackager:
                 break
 
             if line:
-                self.log(line.rstrip())
+                # 将非 ASCII 字符（emoji 等）替换为 ? 避免在 GBK 终端/日志回调中崩溃
+                safe_line = line.rstrip().encode("gbk", errors="replace").decode("gbk", errors="replace")
+                self.log(safe_line)
 
         return False, ""

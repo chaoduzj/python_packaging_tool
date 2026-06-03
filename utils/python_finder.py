@@ -27,11 +27,11 @@ class PythonFinder:
             True 表示当前处于打包环境中
         """
         # PyInstaller 设置的标志属性
-        if getattr(sys, 'frozen', False):
+        if getattr(sys, "frozen", False):
             return True
 
         # PyInstaller 单文件模式的临时解压目录标志
-        if getattr(sys, '_MEIPASS', None):
+        if getattr(sys, "_MEIPASS", None):
             return True
 
         # Nuitka 编译后的标志
@@ -94,6 +94,12 @@ class PythonFinder:
         """
         查找系统中的Python安装路径
 
+        搜索优先级（Windows）：
+        1. 当前运行的 Python（非打包环境）
+        2. PATH 环境变量
+        3. pyenv-win shims → versions（活动版本 → 字母序最新）
+        4. 常见安装路径 + 注册表
+
         Returns:
             Python可执行文件的路径，未找到则返回None
         """
@@ -111,7 +117,7 @@ class PythonFinder:
             self.python_path = path_python
             return path_python
 
-        # 3. Windows特定路径查找
+        # 3. Windows特定路径查找（含 pyenv-win）
         if sys.platform == "win32":
             windows_python = self._find_in_windows()
             if windows_python:
@@ -173,7 +179,57 @@ class PythonFinder:
 
     def _find_in_windows(self) -> Optional[str]:
         """在Windows系统中查找Python"""
-        # 常见的Windows Python安装路径
+        # 1. 检测 pyenv-win shims（优先）
+        pyenv_root = Path.home() / ".pyenv" / "pyenv-win"
+        shim_bat = pyenv_root / "shims" / "python.bat"
+        if shim_bat.exists():
+            # 解析 python.bat 找到真实的 python.exe 路径
+            try:
+                content = shim_bat.read_text(encoding="utf-8", errors="ignore")
+                for line in content.splitlines():
+                    line = line.strip()
+                    if "python.exe" in line and not line.startswith("@"):
+                        # 提取引号中的路径
+                        import re
+
+                        match = re.search(r'"([^"]+python\.exe)"', line)
+                        if match:
+                            python_path = match.group(1)
+                            if os.path.exists(python_path) and self._verify_python(
+                                python_path
+                            ):
+                                return python_path
+            except Exception:
+                pass
+
+        # 2. 检测 pyenv-win versions 目录
+        versions_dir = pyenv_root / "versions"
+        if versions_dir.exists():
+            # 优先使用 version 文件记录的活动版本
+            version_file = pyenv_root / "version"
+            if version_file.exists():
+                try:
+                    active_version = version_file.read_text().strip()
+                    python_exe = versions_dir / active_version / "python.exe"
+                    if python_exe.exists() and self._verify_python(str(python_exe)):
+                        return str(python_exe)
+                except Exception:
+                    pass
+            # 回退：字母序最新的版本目录
+            try:
+                versions = sorted(
+                    [d for d in versions_dir.iterdir() if d.is_dir()],
+                    key=lambda d: d.name,
+                    reverse=True,
+                )
+                for ver_dir in versions:
+                    python_exe = ver_dir / "python.exe"
+                    if python_exe.exists() and self._verify_python(str(python_exe)):
+                        return str(python_exe)
+            except Exception:
+                pass
+
+        # 3. 常见的Windows Python安装路径
         common_paths = [
             Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Python",
             Path(os.environ.get("PROGRAMFILES", "")) / "Python",
@@ -196,7 +252,7 @@ class PythonFinder:
             except Exception:
                 continue
 
-        # 尝试从注册表查找（Windows）
+        # 4. 尝试从注册表查找（Windows）
         try:
             import winreg
 

@@ -1,0 +1,16 @@
+{
+  "pythonVersion": "3.12",
+  "pythonPlatform": "Windows",
+  "venvPath": "C:\\Users\\euper\\.pyenv\\pyenv-win\\versions",
+  "pythonPath": "C:\\Users\\euper\\.pyenv\\pyenv-win\\versions\\3.12.10\\python3.exe",
+  "typeCheckingMode": "basic",
+  "useLibraryCodeForTypes": true,
+  "reportMissingImports": "warning",
+  "reportMissingModuleSource": "none",
+  "exclude": [
+    ".venv",
+    "build",
+    "dist",
+    "__pycache__"
+  ]
+}
