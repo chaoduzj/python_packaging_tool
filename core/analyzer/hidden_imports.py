@@ -1972,7 +1972,6 @@ class HiddenImportsManager:
             hidden.extend([
                 "psutil",
                 "psutil._common",
-                "psutil._compat",
                 "psutil._pswindows",  # Windows 平台后端
                 "psutil._psutil_windows",  # Windows C 扩展
             ])
