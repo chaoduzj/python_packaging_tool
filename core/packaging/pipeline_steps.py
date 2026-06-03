@@ -174,19 +174,22 @@ class DependencyInstallStep(PackagingStep):
 # =============================================================================
 
 class OutputDirStep(PackagingStep):
-    """验证并准备输出目录。
+    """验证并准备输出目录（含安全检查与保守清理）。
+
+    委托 Packager._prepare_output_dir，恢复 _is_safe_output_dir 安全检查
+    （防止误删 C:\\ 等受保护目录）和构建产物清理，与传统 package() 第 4 步等价。
 
     context 输入: config
     context 输出: output_dir
     """
 
+    def __init__(self, packager: Any):
+        self._packager = packager
+
     def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        config = context["config"]
-        output_dir = config.get("output_dir")
-        if not output_dir:
-            script_path = config["script_path"]
-            output_dir = os.path.join(os.path.dirname(script_path), "build")
-        os.makedirs(output_dir, exist_ok=True)
+        log = context.get("log", print)
+        output_dir = self._packager._prepare_output_dir(context["config"])
+        log(f"输出目录: {output_dir}")
         context["output_dir"] = output_dir
         return context
 

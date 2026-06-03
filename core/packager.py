@@ -93,7 +93,7 @@ class Packager:
                 ChinesePathCheckStep(self),
                 DependencyAnalysisStep(self.dependency_analyzer),
                 DependencyInstallStep(self.dependency_installer),
-                OutputDirStep(),
+                OutputDirStep(self),
                 IconProcessingStep(self.icon_processor),
             ]
         )
