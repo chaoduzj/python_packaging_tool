@@ -875,7 +875,8 @@ class RceditHandler:
 
         product_name = version_info.get("product_name", "")
         company_name = version_info.get("company_name", "")
-        file_description = version_info.get("file_description", "")
+        # 文件说明：优先取配置值，空时回退到产品名（确保总是有值）
+        file_description = version_info.get("file_description", "") or product_name
         # 同时支持 'copyright' 和 'copyright_text' 两种键名
         copyright_text = version_info.get("copyright_text", "") or version_info.get(
             "copyright", ""
