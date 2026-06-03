@@ -4,7 +4,6 @@ Python打包工具 - 主入口
 简单易用的Python脚本打包工具，支持PyInstaller和Nuitka两种打包方式。
 """
 
-# Early startup error capture for compiled exe (console disabled mode)
 import os
 import sys
 
@@ -13,15 +12,6 @@ import warnings
 
 warnings.filterwarnings("ignore", category=UserWarning, module="PIL")
 
-if getattr(sys, "frozen", False) or "__compiled__" in dir():
-    import datetime
-
-    _exe_dir = os.path.dirname(sys.executable)
-    try:
-        sys.stderr = open(os.path.join(_exe_dir, "error.log"), "w", encoding="utf-8")
-        sys.stdout = sys.stderr
-    except Exception:
-        pass
 from typing import Optional
 
 # 添加项目根目录到Python路径
