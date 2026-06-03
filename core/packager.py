@@ -1147,21 +1147,22 @@ VSVersionInfo(
     def _inject_icon_entry(
         self, pack_config: Dict, tool: str, output_dir: str, icon_path: Optional[str]
     ) -> None:
-        """后处理关注点 2：Nuitka 图标入口注入。
+        """后处理关注点 2：图标入口注入（Nuitka + PyInstaller）。
 
-        仅在指定图标、使用 Nuitka、且非自打包时注入图标入口代码
-        （打包工具自身的 main.py 已有正确的 __compiled__ 检测）。
+        Nuitka 不设置 sys.frozen，PyInstaller 设置但用户代码可能遗漏 setWindowIcon。
+        注入 _ppt_entry.py 确保窗口标题栏图标由 QApplication 构造时自动设置。
+        自打包时跳过（打包工具自身的 main.py 已有正确检测）。
         """
         is_self_packaging = os.path.abspath(pack_config["script_path"]) == os.path.abspath(
             os.path.join(os.path.dirname(os.path.dirname(__file__)), "main.py")
         )
-        if icon_path and tool == "nuitka" and not is_self_packaging:
+        if icon_path and not is_self_packaging:
             wrapper_path = self._create_icon_entry_wrapper(
                 output_dir, pack_config["script_path"], icon_path
             )
             if wrapper_path:
                 pack_config["script_path"] = wrapper_path
-                self.log("  已注入图标入口代码（兼容 Nuitka onefile 模式）")
+                self.log("  已注入图标入口代码（自动设置窗口图标）")
 
     def _execute_build(
         self,
