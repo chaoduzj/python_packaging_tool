@@ -25,6 +25,7 @@ from core.packaging.network_utils import NetworkUtils
 from core.packaging.nuitka_packager import NuitkaPackager
 from core.packaging.pipeline import PackagingPipeline
 from core.packaging.pipeline_steps import (
+    ChinesePathCheckStep,
     DependencyAnalysisStep,
     DependencyInstallStep,
     IconProcessingStep,
@@ -89,6 +90,7 @@ class Packager:
             [
                 PythonDiscoveryStep(self),
                 VenvSetupStep(self),
+                ChinesePathCheckStep(self),
                 DependencyAnalysisStep(self.dependency_analyzer),
                 DependencyInstallStep(self.dependency_installer),
                 OutputDirStep(),

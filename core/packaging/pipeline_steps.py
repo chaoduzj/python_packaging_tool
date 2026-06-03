@@ -75,7 +75,28 @@ class VenvSetupStep(PackagingStep):
 
 
 # =============================================================================
-#  Step 3 — 依赖分析
+#  Step 3 — 中文路径检查
+# =============================================================================
+
+class ChinesePathCheckStep(PackagingStep):
+    """检查脚本/项目路径中的中文并发出警告。
+
+    委托 Packager._check_chinese_paths，与传统 package() 第 3 步等价。
+
+    context 输入: config
+    context 输出: (无新增字段，仅产生警告日志)
+    """
+
+    def __init__(self, packager: Any):
+        self._packager = packager
+
+    def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        self._packager._check_chinese_paths(context["config"])
+        return context
+
+
+# =============================================================================
+#  Step 4 — 依赖分析
 # =============================================================================
 
 class DependencyAnalysisStep(PackagingStep):
