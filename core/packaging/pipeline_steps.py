@@ -195,6 +195,38 @@ class OutputDirStep(PackagingStep):
 
 
 # =============================================================================
+#  Step — Qt 框架检测
+# =============================================================================
+
+class QtFrameworkDetectStep(PackagingStep):
+    """检测项目主要 Qt 框架（PyQt5/6、PySide2/6）。
+
+    委托 dependency_analyzer.detect_primary_qt_framework，
+    与传统 package() 第 5 步等价。结果存于分析器实例，供后续打包步骤使用。
+
+    context 输入: config
+    context 输出: primary_qt（如检测到）
+    """
+
+    def __init__(self, dependency_analyzer: Any):
+        self._analyzer = dependency_analyzer
+
+    def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        config = context["config"]
+        log = context.get("log", print)
+        script_path = config["script_path"]
+        project_dir = config.get("project_dir")
+
+        primary_qt = self._analyzer.detect_primary_qt_framework(
+            script_path, project_dir
+        )
+        if primary_qt:
+            log(f"检测到GUI主要 Qt 框架: {primary_qt}")
+            context["primary_qt"] = primary_qt
+        return context
+
+
+# =============================================================================
 #  Step 6 — 图标处理
 # =============================================================================
 

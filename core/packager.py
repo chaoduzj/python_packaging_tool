@@ -31,6 +31,7 @@ from core.packaging.pipeline_steps import (
     IconProcessingStep,
     OutputDirStep,
     PythonDiscoveryStep,
+    QtFrameworkDetectStep,
     VenvSetupStep,
 )
 from core.packaging.pyinstaller_packager import PyInstallerPackager
@@ -91,9 +92,10 @@ class Packager:
                 PythonDiscoveryStep(self),
                 VenvSetupStep(self),
                 ChinesePathCheckStep(self),
+                OutputDirStep(self),
+                QtFrameworkDetectStep(self.dependency_analyzer),
                 DependencyAnalysisStep(self.dependency_analyzer),
                 DependencyInstallStep(self.dependency_installer),
-                OutputDirStep(self),
                 IconProcessingStep(self.icon_processor),
             ]
         )
