@@ -34,6 +34,7 @@ class PythonDiscoveryStep(PackagingStep):
         if not base_python:
             context["success"] = False
             context["message"] = error or "未找到 Python 环境"
+            context["_halt"] = True
             return context
 
         log(f"基础 Python: {base_python}")

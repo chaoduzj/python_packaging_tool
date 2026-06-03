@@ -125,9 +125,10 @@ class Packager:
         cancel_flag: Optional[Callable] = None,
         process_callback: Optional[Callable] = None,
     ) -> Tuple[bool, str, Optional[str]]:
-        """通过 Pipeline 执行打包（新架构入口）。
+        """通过完整 Pipeline 执行打包（新架构主入口）。
 
-        与 package() 功能等价，用于渐进迁移验证。
+        运行 build_pipeline() 的 16 个 Step，与传统 package() 严格等价。
+        各 Step 委托 Packager 的已验证方法，行为一致。
         """
         if log_callback:
             self._set_log_callback(log_callback)
@@ -136,35 +137,24 @@ class Packager:
         if process_callback:
             self._set_process_callback(process_callback)
 
-        pipeline = self.build_pipeline()
-        context: Dict[str, Any] = {
-            "config": config,
-            "log": self.log,
-            "cancelled": self._is_cancelled,
-        }
+        try:
+            pipeline = self.build_pipeline()
+            context: Dict[str, Any] = {
+                "config": config,
+                "log": self.log,
+                "cancelled": self._is_cancelled,
+            }
+            result = pipeline.run(context)
 
-        result = pipeline.run(context)
+            success = result.get("success", False)
+            message = result.get("message", "")
+            return success, message, self._last_exe_path
+        except Exception as e:
+            self.log(f"打包异常: {e}")
+            import traceback
 
-        python_path = result.get("python_path", "")
-        output_dir = result.get("output_dir", "")
-        hidden_imports = result.get("hidden_imports", [])
-        exclude_modules = result.get("exclude_modules", [])
-        icon_path = result.get("icon_path")
-
-        if not python_path:
-            return False, result.get("message", "流水线执行失败"), None
-
-        # 剩余步骤 7-12 通过传统 _do_package 完成
-        success, message = self._do_package(
-            python_path,
-            config,
-            output_dir,
-            hidden_imports,
-            exclude_modules,
-            icon_path,
-            None,
-        )
-        return success, message, self._last_exe_path
+            self.log(traceback.format_exc())
+            return False, f"打包过程出错: {str(e)}", None
 
     def _set_log_callback(self, callback: Callable) -> None:
         """设置日志回调到所有子模块"""

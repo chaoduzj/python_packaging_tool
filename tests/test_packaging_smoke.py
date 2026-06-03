@@ -95,3 +95,21 @@ class TestPackageSmokePyInstaller:
         assert not os.path.exists(os.path.join(output_dir, "version_info.txt"))
         assert not os.path.exists(os.path.join(output_dir, "icon_converted.ico"))
         assert not os.path.exists(os.path.join(project_dir, "_ppt_entry.py"))
+
+    def test_pipeline_produces_exe(self, minimal_packable_project):
+        """package_via_pipeline() 应成功打包并产出真实存在的 exe 文件。
+
+        这是 Pipeline 迁移的最终验证——证明 16 步 Pipeline 全程可工作。
+        """
+        project_dir, main_script, output_dir = minimal_packable_project
+        packager = Packager()
+        logs: list[str] = []
+        success, message, exe_path = packager.package_via_pipeline(
+            _make_config(main_script, output_dir, "pyinstaller"),
+            log_callback=logs.append,
+        )
+
+        assert success is True, f"Pipeline 打包失败: {message}\n日志:\n" + "\n".join(logs[-30:])
+        assert exe_path is not None, "未返回 exe 路径"
+        assert os.path.isfile(exe_path), f"exe 文件不存在: {exe_path}"
+        assert exe_path.lower().endswith(".exe")

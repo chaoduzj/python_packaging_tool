@@ -45,7 +45,12 @@ class PackagingPipeline:
         self._steps.append(step)
 
     def run(self, initial_context: Dict[str, Any]) -> Dict[str, Any]:
-        """按顺序执行所有步骤。"""
+        """按顺序执行所有步骤。
+
+        在 Step 之间统一检查取消标志（等价于传统 package() 每步后的取消检查）。
+        不打印额外的步骤横幅，使日志输出与传统路径严格一致——
+        各 Step 的日志由其委托的 Packager 方法原样产生。
+        """
         context = initial_context.copy()
         log = context.get("log", print)
         cancelled = context.get("cancelled", lambda: False)
@@ -57,16 +62,18 @@ class PackagingPipeline:
                 context["message"] = "打包已取消"
                 return context
 
-            log(f"\n{'─' * 40}")
-            log(f"步骤: {step.name}")
-            log(f"{'─' * 40}")
-
             try:
                 context = step.run(context)
             except Exception as e:
                 log(f"步骤 {step.name} 失败: {e}")
                 context["success"] = False
                 context["message"] = str(e)
+                return context
+
+            # 前置步骤硬停止（如 Python 发现失败）：设置 _halt 提前结束。
+            # 注意：打包执行失败 (success=False) 不在此提前退出，
+            # 以便后续的版本后处理/临时清理 Step 仍能执行（与传统 _do_package 一致）。
+            if context.get("_halt"):
                 return context
 
         return context
