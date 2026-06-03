@@ -94,7 +94,7 @@ class Packager:
                 ChinesePathCheckStep(self),
                 OutputDirStep(self),
                 QtFrameworkDetectStep(self.dependency_analyzer),
-                DependencyAnalysisStep(self.dependency_analyzer),
+                DependencyAnalysisStep(self),
                 DependencyInstallStep(self.dependency_installer),
                 IconProcessingStep(self.icon_processor),
             ]

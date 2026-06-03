@@ -102,35 +102,25 @@ class ChinesePathCheckStep(PackagingStep):
 class DependencyAnalysisStep(PackagingStep):
     """分析项目依赖、隐藏导入、排除模块。
 
+    委托 Packager._analyze_dependencies，与传统 package() 第 6 步使用
+    相同的分析接口，保证 deps/hidden_imports/exclude_modules 计算严格一致。
+
     context 输入: python_path, config
     context 输出: dependencies, hidden_imports, exclude_modules
     """
 
-    def __init__(self, dependency_analyzer: Any):
-        self._analyzer = dependency_analyzer
+    def __init__(self, packager: Any):
+        self._packager = packager
 
     def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
         config = context["config"]
-        log = context.get("log", print)
         script_path = config["script_path"]
         project_dir = config.get("project_dir")
-        python_path = context.get("python_path", sys.executable)
+        python_path = context["python_path"]
 
-        log("\n分析项目依赖...")
-        deps = self._analyzer.analyze(script_path, project_dir)
-        log(f"检测到 {len(deps)} 个依赖")
-
-        if config.get("trace_imports", False):
-            log("\n追踪动态导入...")
-            self._analyzer.trace_dynamic_imports(script_path, project_dir, python_path)
-
-        hidden_imports = self._analyzer.get_hidden_imports(python_path)
-        if hidden_imports:
-            log(f"需要隐藏导入: {len(hidden_imports)} 个模块")
-
-        exclude_modules = self._analyzer.get_exclude_modules()
-        if exclude_modules:
-            log(f"排除模块: {len(exclude_modules)} 个")
+        deps, hidden_imports, exclude_modules = self._packager._analyze_dependencies(
+            script_path, project_dir, python_path, config
+        )
 
         context["dependencies"] = deps
         context["hidden_imports"] = hidden_imports
