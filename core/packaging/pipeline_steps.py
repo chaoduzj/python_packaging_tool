@@ -21,38 +21,27 @@ if TYPE_CHECKING:
 class PythonDiscoveryStep(PackagingStep):
     """发现基础 Python 解释器路径。
 
-    优先级：用户指定 > 系统搜索 > 当前解释器。
+    委托 Packager._get_python_path 以保证与传统 package() 路径逐字等价。
 
     context 输入: config
-    context 输出: python_path
+    context 输出: python_path（失败时设置 success=False / message）
     """
+
+    def __init__(self, packager: Any):
+        self._packager = packager
 
     def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
         config = context["config"]
         log = context.get("log", print)
 
-        python_path = config.get("python_path") or config.get("python")
-        if python_path and os.path.exists(python_path):
-            log(f"使用指定 Python: {python_path}")
-            context["python_path"] = python_path
-            return context
-
-        from utils.python_finder import PythonFinder
-
-        if PythonFinder.is_bundled_environment():
-            log("当前在打包环境中运行，搜索系统 Python...")
-            finder = PythonFinder()
-            system_python = finder.find_python()
-            if system_python:
-                log(f"✓ 找到系统 Python: {system_python}")
-                context["python_path"] = system_python
-                return context
+        base_python, error = self._packager._get_python_path(config)
+        if not base_python:
             context["success"] = False
-            context["message"] = "未找到系统 Python，请在界面中手动指定"
+            context["message"] = error or "未找到 Python 环境"
             return context
 
-        context["python_path"] = sys.executable
-        log(f"使用当前解释器: {sys.executable}")
+        log(f"基础 Python: {base_python}")
+        context["python_path"] = base_python
         return context
 
 
