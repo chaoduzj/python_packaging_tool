@@ -917,6 +917,8 @@ class RceditHandler:
                     ("FileDescription", file_description),
                     ("LegalCopyright", copyright_text),
                     ("CompanyName", company_name),
+                    ("OriginalFilename", f"{product_name}.exe" if product_name else ""),
+                    ("InternalName", product_name),
                 ]
 
                 for field_name, field_value in version_fields:
