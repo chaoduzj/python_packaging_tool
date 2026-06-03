@@ -30,6 +30,7 @@ from core.packaging.pipeline_steps import (
     DependencyInstallStep,
     IconProcessingStep,
     OutputDirStep,
+    PackagingToolInstallStep,
     PythonDiscoveryStep,
     QtFrameworkDetectStep,
     VenvSetupStep,
@@ -95,7 +96,8 @@ class Packager:
                 OutputDirStep(self),
                 QtFrameworkDetectStep(self.dependency_analyzer),
                 DependencyAnalysisStep(self),
-                DependencyInstallStep(self.dependency_installer),
+                DependencyInstallStep(self),
+                PackagingToolInstallStep(self.dependency_installer),
                 IconProcessingStep(self.icon_processor),
             ]
         )

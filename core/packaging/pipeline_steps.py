@@ -129,13 +129,42 @@ class DependencyAnalysisStep(PackagingStep):
 
 
 # =============================================================================
-#  Step 4 — 依赖安装
+#  Step 7 — 安装项目依赖
 # =============================================================================
 
 class DependencyInstallStep(PackagingStep):
-    """安装分析到的项目依赖和打包工具。
+    """安装分析到的项目依赖。
+
+    委托 Packager._install_dependencies，与传统 package() 第 7 步等价。
 
     context 输入: python_path, dependencies, config
+    context 输出: (无新增字段)
+    """
+
+    def __init__(self, packager: Any):
+        self._packager = packager
+
+    def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        config = context["config"]
+        python_path = context["python_path"]
+        deps = context.get("dependencies", set())
+        project_dir = config.get("project_dir")
+
+        self._packager._install_dependencies(python_path, deps, project_dir)
+        return context
+
+
+# =============================================================================
+#  Step 8 — 安装打包工具
+# =============================================================================
+
+class PackagingToolInstallStep(PackagingStep):
+    """安装打包工具（nuitka / pyinstaller）。
+
+    委托 dependency_installer.install_packaging_tool，
+    与传统 package() 第 8 步等价。
+
+    context 输入: python_path, config
     context 输出: (无新增字段)
     """
 
@@ -146,16 +175,10 @@ class DependencyInstallStep(PackagingStep):
         config = context["config"]
         log = context.get("log", print)
         python_path = context["python_path"]
-        deps = context.get("dependencies", set())
-        project_dir = config.get("project_dir")
-
-        log("\n安装项目依赖...")
-        self._installer.install_analyzed_dependencies(python_path, deps, project_dir)
-
         tool = config.get("tool", "pyinstaller")
+
         log(f"\n检查打包工具 {tool}...")
         self._installer.install_packaging_tool(python_path, tool)
-
         return context
 
 
