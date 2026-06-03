@@ -124,3 +124,15 @@ class PackagingConfig:
     def get(self, key: str, default: Any = None) -> Any:
         """兼容 dict.get() 调用方式。"""
         return getattr(self, key, default)
+
+    def __getitem__(self, key: str) -> Any:
+        """兼容 config["key"] 下标访问（dataclass → dict 过渡期）。"""
+        return getattr(self, key)
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        """兼容 config["key"] = value 下标赋值（dataclass → dict 过渡期）。"""
+        setattr(self, key, value)
+
+    def __contains__(self, key: str) -> bool:
+        """兼容 "key" in config 成员检测。"""
+        return hasattr(self, key)

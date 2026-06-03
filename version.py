@@ -5,11 +5,11 @@ Python打包工具 - 版本信息
 """
 
 # 版本号
-__version__ = "1.5.7"
+__version__ = "1.6.0"
 VERSION = __version__
 
 # 构建日期（用于显示，不参与Windows文件版本号）
-BUILD_DATE = "20260601"
+BUILD_DATE = "20260603"
 
 # 完整显示版本（用于UI显示）
 DISPLAY_VERSION = f"{__version__}.{BUILD_DATE}"
@@ -30,7 +30,9 @@ AUTHOR_EMAIL = "love-left@qq.com"
 # 版权信息
 COPYRIGHT = f"Copyright © 2026 {AUTHOR}"
 DESCRIPTION = "一个简单易用的Python脚本打包工具，支持PyInstaller和Nuitka两种打包方式。"
-DESCRIPTION_EN = "A simple and easy-to-use Python script packaging tool, supporting PyInstaller and Nuitka packing methods."
+DESCRIPTION_EN = (
+    "A simple and easy-to-use Python script packaging tool, supporting PyInstaller and Nuitka packing methods."
+)
 
 # 自述信息
 ABOUT_TEXT = "可有偿提供各种python脚本定制、修改等服务。"
