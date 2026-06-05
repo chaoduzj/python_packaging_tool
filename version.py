@@ -35,7 +35,11 @@ DESCRIPTION_EN = (
 )
 
 # 自述信息
-ABOUT_TEXT = "可有偿提供各种python脚本定制、修改等服务。"
+ABOUT_TEXT = ""
+# ABOUT_TEXT = "可有偿提供各种python脚本定制、修改等服务。"
+
+# 是否在反馈弹框中显示捐赠用户专属特权说明
+SHOW_VIP_PRIVILEGE = False
 
 # 项目链接（可选）
 PROJECT_URL = ""

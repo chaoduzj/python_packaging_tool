@@ -71,7 +71,7 @@ from utils.dependency_manager import DependencyManager
 from utils.gcc_downloader import GCCDownloader, validate_mingw_directory
 
 # 导入版本信息
-from version import APP_NAME, AUTHOR_EMAIL, DISPLAY_VERSION, get_about_html
+from version import APP_NAME, AUTHOR_EMAIL, DISPLAY_VERSION, SHOW_VIP_PRIVILEGE, get_about_html
 
 
 class MainWindow(QMainWindow):
@@ -456,12 +456,13 @@ class MainWindow(QMainWindow):
         log_text.setMaximumHeight(200)
         layout.addWidget(log_text)
 
-        # 专属特权说明
-        highlight_color = "#FFD700" if self.theme_manager.is_dark else "#FF0000"
-        vip_label = QLabel(
-            f"<br><span style='color: {highlight_color};'>捐赠用户在遇到打包问题时，将<b>优先获得技术支持和问题排查协助</b>。</span><br>"
-        )
-        layout.addWidget(vip_label)
+        # 专属特权说明（由 version.py 中的 SHOW_VIP_PRIVILEGE 开关控制）
+        if SHOW_VIP_PRIVILEGE:
+            highlight_color = "#FFD700" if self.theme_manager.is_dark else "#FF0000"
+            vip_label = QLabel(
+                f"<br><span style='color: {highlight_color};'>捐赠用户在遇到打包问题时，将<b>优先获得技术支持和问题排查协助</b>。</span><br>"
+            )
+            layout.addWidget(vip_label)
 
         # 作者邮箱
         email_label = QLabel(f"<b>作者邮箱：</b> {AUTHOR_EMAIL}")
