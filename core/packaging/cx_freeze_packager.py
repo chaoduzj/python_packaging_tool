@@ -312,6 +312,15 @@ class CxFreezePackager(BasePackager):
         if copied:
             self.log(f"  已预复制 {copied} 个数据/图标文件到输出目录（保留子目录结构）")
 
+        # 额外在输出根目录放一份 icon.ico，覆盖 exe_dir/icon.ico 查找模式
+        icon = config.get("icon_path") or config.get("icon")
+        if icon and os.path.isfile(icon):
+            root_icon = os.path.join(output_dir, "icon.ico")
+            try:
+                shutil.copy2(icon, root_icon)
+            except Exception:
+                pass
+
     @staticmethod
     def _clean_egg_info(output_dir: str) -> None:
         """清理 cx_Freeze 生成的 *.egg-info 目录。"""

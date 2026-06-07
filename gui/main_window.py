@@ -601,7 +601,12 @@ class MainWindow(QMainWindow):
 
             # 图片
             img_label = QLabel()
-            img_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "resources", img_name)
+            # 打包后 exe 同级目录搜索图片（cx_Freeze/PyInstaller/Nuitka 均适用）
+            if getattr(sys, "frozen", False) or "__compiled__" in dir():
+                base = os.path.dirname(sys.executable)
+            else:
+                base = os.path.dirname(os.path.dirname(__file__))
+            img_path = os.path.join(base, "resources", img_name)
             if os.path.exists(img_path):
                 pixmap = QPixmap(img_path)
                 scaled_pixmap = pixmap.scaled(
@@ -850,8 +855,12 @@ class MainWindow(QMainWindow):
         self.pyinstaller_radio = QRadioButton("PyInstaller")
         self.pyinstaller_radio.toggled.connect(self.on_tool_changed)
 
+        self.cx_freeze_radio = QRadioButton("cx_Freeze")
+        self.cx_freeze_radio.toggled.connect(self.on_tool_changed)
+
         tool_radio_layout.addWidget(self.nuitka_radio)
         tool_radio_layout.addWidget(self.pyinstaller_radio)
+        tool_radio_layout.addWidget(self.cx_freeze_radio)
         tool_radio_layout.addStretch()
         tool_layout.addLayout(tool_radio_layout)
 
@@ -1949,18 +1958,26 @@ class MainWindow(QMainWindow):
     def on_tool_changed(self, checked: bool) -> None:
         """处理打包工具变更"""
         is_nuitka = self.nuitka_radio.isChecked()
+        is_cx_freeze = self.cx_freeze_radio.isChecked()
 
         # Show/hide Nuitka-specific options
         self.gcc_widget.setVisible(is_nuitka)
 
         # PyInstaller: 隐藏 UPX 选项（由于兼容性问题强制禁用）
         # Nuitka: 显示 UPX 选项（如果用户想用）
+        # cx_Freeze: 隐藏 UPX（无关）
         if hasattr(self, "upx_check"):
             self.upx_check.setVisible(is_nuitka)
             if is_nuitka:
                 self.upx_check.setChecked(True)
             else:
                 self.upx_check.setChecked(False)
+
+        # cx_Freeze: 不支持单文件模式，隐藏该选项
+        if hasattr(self, "onefile_check"):
+            self.onefile_check.setVisible(not is_cx_freeze)
+            if is_cx_freeze:
+                self.onefile_check.setChecked(False)
 
         # Load GCC config for Nuitka
         if is_nuitka and not self.gcc_config_loaded and not self.gcc_config_loading:
@@ -2135,6 +2152,7 @@ class MainWindow(QMainWindow):
             python_path_edit=self.python_path_edit.text(),
             gcc_path_edit=self.gcc_path_edit.text(),
             is_nuitka=self.nuitka_radio.isChecked(),
+            is_cx_freeze=self.cx_freeze_radio.isChecked(),
             onefile=self.onefile_check.isChecked(),
             console=self.console_check.isChecked(),
             clean=self.clean_check.isChecked(),
