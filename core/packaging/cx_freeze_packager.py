@@ -203,6 +203,8 @@ class CxFreezePackager(BasePackager):
 
                 if exe_path and os.path.exists(exe_path):
                     self._last_exe_path = exe_path
+                    # 清理 cx_Freeze 生成的 egg-info 目录
+                    self._clean_egg_info(output_dir)
                     return True, f"打包成功！\n\n输出文件: {exe_path}"
                 else:
                     return False, "打包完成，但未找到输出文件"
@@ -309,6 +311,17 @@ class CxFreezePackager(BasePackager):
 
         if copied:
             self.log(f"  已预复制 {copied} 个数据/图标文件到输出目录（保留子目录结构）")
+
+    @staticmethod
+    def _clean_egg_info(output_dir: str) -> None:
+        """清理 cx_Freeze 生成的 *.egg-info 目录。"""
+        try:
+            for entry in os.scandir(output_dir):
+                if entry.is_dir() and entry.name.endswith(".egg-info"):
+                    import shutil
+                    shutil.rmtree(entry.path, ignore_errors=True)
+        except Exception:
+            pass
 
     def _find_output_exe(
         self,
