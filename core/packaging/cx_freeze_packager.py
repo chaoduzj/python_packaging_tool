@@ -150,14 +150,10 @@ class CxFreezePackager(BasePackager):
 
         self.log(f"输出文件名: {script_name}")
 
-        # ---------- 预复制数据文件到输出目录（保留子目录结构）----------
-        # cx_Freeze CLI 的 --include-files 不支持 src:dst 映射，
-        # 且会将所有文件平铺到 build 根目录。为此在打包前将数据文件
-        # 按项目内的相对路径复制到输出目录，确保 app 能以原有相对路径找到它们。
+        # 重新确认 project_dir（可能被 config 覆盖）
         project_dir = config.get("project_dir") or os.path.dirname(
             os.path.abspath(script_path)
         )
-        self._pre_copy_data_files(config, output_dir, project_dir)
 
         # 构建命令
         cmd = self.build_command(
@@ -203,8 +199,11 @@ class CxFreezePackager(BasePackager):
 
                 if exe_path and os.path.exists(exe_path):
                     self._last_exe_path = exe_path
-                    # 清理 cx_Freeze 生成的 egg-info 目录
+                    # 构建后再复制数据文件（避免被 cx_Freeze 清空 target-dir 时删除）
+                    self._pre_copy_data_files(config, output_dir, project_dir)
+                    # 清理 egg-info（项目根目录 + 输出目录均可能产生）
                     self._clean_egg_info(output_dir)
+                    self._clean_egg_info(project_dir)
                     return True, f"打包成功！\n\n输出文件: {exe_path}"
                 else:
                     return False, "打包完成，但未找到输出文件"
