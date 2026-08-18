@@ -12,6 +12,7 @@
 - 支持镜像源故障自动切换
 """
 
+import os
 import subprocess
 import sys
 import time
@@ -24,13 +25,14 @@ class NetworkUtils:
     """网络工具类"""
 
     # 国内镜像源列表（国内网络环境优先使用）
+    # 注意：豆瓣 PyPI 镜像 (pypi.douban.com) 已于 2022 年停服，已从列表中移除
     PIP_MIRRORS_DOMESTIC: List[Tuple[str, Optional[str]]] = [
         ("阿里云", "https://mirrors.aliyun.com/pypi/simple"),
         ("清华大学", "https://pypi.tuna.tsinghua.edu.cn/simple"),
         ("腾讯云", "https://mirrors.cloud.tencent.com/pypi/simple"),
         ("华为云", "https://repo.huaweicloud.com/repository/pypi/simple"),
         ("中科大", "https://pypi.mirrors.ustc.edu.cn/simple"),
-        ("豆瓣", "https://pypi.douban.com/simple"),
+        ("南京大学", "https://mirror.nju.edu.cn/pypi/web/simple"),
         ("默认源", None),  # 默认 PyPI 放在最后
     ]
 
@@ -42,7 +44,7 @@ class NetworkUtils:
         ("腾讯云", "https://mirrors.cloud.tencent.com/pypi/simple"),
         ("华为云", "https://repo.huaweicloud.com/repository/pypi/simple"),
         ("中科大", "https://pypi.mirrors.ustc.edu.cn/simple"),
-        ("豆瓣", "https://pypi.douban.com/simple"),
+        ("南京大学", "https://mirror.nju.edu.cn/pypi/web/simple"),
     ]
 
     def __init__(self):
@@ -177,7 +179,6 @@ class NetworkUtils:
             安装是否成功
         """
         # 验证 Python 解释器是否存在
-        import os
         if not os.path.exists(python_path):
             self.log(f"错误: Python 解释器不存在，无法安装包")
             self.log(f"  路径: {python_path}")

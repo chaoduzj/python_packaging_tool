@@ -673,6 +673,11 @@ class RceditHandler:
 
         return None
 
+    # rcedit-x64.exe 2.0.0 实际大小约 1.5MB；设 100KB 下限用于剔除
+    # 明显异常的下载内容（如 HTML 错误页、被镜像改写的小文件）。
+    # PE 头校验只能证明"这是个 exe"，加上大小校验可挡掉更多异常情况。
+    REDIT_MIN_SIZE_BYTES = 100 * 1024
+
     def download_rcedit(self) -> Optional[str]:
         """
         下载 rcedit 工具
@@ -685,15 +690,22 @@ class RceditHandler:
                 import requests
             except ImportError:
                 requests = None
+                # 静默回退到标准库 urllib：输出一次提示，便于诊断下载行为差异
+                # （urllib 不支持 HTTP keep-alive、连接池，速度略慢但功能等价）
+                self.log("  提示：requests 库未安装，使用标准库 urllib 进行下载")
 
             import urllib.error
             import urllib.request
 
-            # 使用多个下载源，优先直接从 GitHub 下载
+            # 下载源策略：
+            # - 第一个 URL 是 GitHub 官方源，无供应链风险，应优先使用
+            # - 后续为第三方镜像（ghproxy / gh-proxy），仅在 GitHub 直连失败时回退
+            #   这些镜像非官方运营，理论上存在内容被替换的风险。
+            #   下载后会做 PE 头 + 最小文件大小双重校验，但无法 100% 保证等同官方产物。
             urls = [
-                "https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe",
-                "https://mirror.ghproxy.com/https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe",
-                "https://gh-proxy.com/https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe",
+                ("https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe", False),
+                ("https://mirror.ghproxy.com/https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe", True),
+                ("https://gh-proxy.com/https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe", True),
             ]
 
             tools_dir = os.path.join(
@@ -703,8 +715,20 @@ class RceditHandler:
 
             rcedit_path = os.path.join(tools_dir, "rcedit.exe")
 
-            for url in urls:
+            mirror_warned = False  # 仅在首次使用镜像时输出一次警告
+            for url, is_mirror in urls:
                 try:
+                    if is_mirror and not mirror_warned:
+                        self.log(
+                            "  ⚠️ 注意：GitHub 直连失败，回退到第三方镜像源："
+                            f"{url.split('//')[1].split('/')[0]}"
+                        )
+                        self.log(
+                            "     第三方镜像非官方运营，存在理论上的供应链替换风险；"
+                            "建议网络条件允许时优先使用 GitHub 官方源。"
+                        )
+                        mirror_warned = True
+
                     self.log(f"  正在下载 rcedit: {url}")
                     content = None
 
@@ -724,16 +748,22 @@ class RceditHandler:
                                 content = resp.read()
 
                     if content:
-                        # 验证下载的内容是否为有效的 PE 文件（Windows 可执行文件）
+                        # 双重校验：PE 头 + 最小文件大小
                         if not self._validate_pe_file(content):
                             self.log(
                                 "  下载的文件不是有效的 Windows 可执行文件，跳过此源"
                             )
                             continue
+                        if len(content) < self.REDIT_MIN_SIZE_BYTES:
+                            self.log(
+                                f"  下载内容过小（{len(content)} 字节 < "
+                                f"{self.REDIT_MIN_SIZE_BYTES} 字节），可能非完整 rcedit，跳过此源"
+                            )
+                            continue
 
                         with open(rcedit_path, "wb") as f:
                             f.write(content)
-                        self.log(f"  ✓ rcedit 下载成功: {rcedit_path}")
+                        self.log(f"  ✓ rcedit 下载成功: {rcedit_path}（{len(content)} 字节）")
                         return rcedit_path
 
                 except Exception as e:

@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from core.packaging.base import CREATE_NO_WINDOW, BasePackager, verify_tool
+from utils.constants import SKIP_DIRECTORIES
 
 
 class CxFreezePackager(BasePackager):
@@ -220,8 +221,6 @@ class CxFreezePackager(BasePackager):
         包括有 __init__.py 的常规包和包含 .py 文件的命名空间包。
         跳过虚拟环境、构建目录等无关目录。
         """
-        from utils.constants import SKIP_DIRECTORIES
-
         skip_dirs = set(SKIP_DIRECTORIES) | {
             ".github", ".tox", ".mypy_cache", "logs", "output",
         }
@@ -354,17 +353,25 @@ class CxFreezePackager(BasePackager):
         if os.path.exists(exe_path):
             return exe_path
 
-        # 尝试子目录
-        for subdir_name in [script_name, "exe.win-amd64-3.12", "exe.win32-3.12"]:
+        # 尝试子目录（含当前解释器版本号的动态构造，避免硬编码 3.12）
+        py_version_subdir = f"exe.win-amd64-{sys.version_info.major}.{sys.version_info.minor}"
+        py_version_subdir_32 = f"exe.win32-{sys.version_info.major}.{sys.version_info.minor}"
+        for subdir_name in [script_name, py_version_subdir, py_version_subdir_32]:
             sub_exe = os.path.join(output_dir, subdir_name, f"{script_name}.exe")
             if os.path.exists(sub_exe):
                 return sub_exe
 
-        # 尝试查找任何 .exe 文件
+        # 兜底：仅当输出目录下恰好只有 1 个 exe 时才返回，
+        # 避免误匹配上一次构建的旧产物或其他工具的输出。
+        # 多于 1 个时无法确定哪个是本次产物，返回 None 让上层报错。
         try:
-            for entry in os.scandir(output_dir):
-                if entry.is_file() and entry.name.endswith(".exe"):
-                    return entry.path
+            exe_candidates = [
+                entry.path
+                for entry in os.scandir(output_dir)
+                if entry.is_file() and entry.name.endswith(".exe")
+            ]
+            if len(exe_candidates) == 1:
+                return exe_candidates[0]
         except Exception:
             pass
 

@@ -121,16 +121,29 @@ class PackagingConfig:
             extra_data=d.get("extra_data", []),
         )
 
+    # ------------------------------------------------------------------
+    # dict 兼容层（长期保留，非过渡期）
+    # ------------------------------------------------------------------
+    # 历史上内部代码使用 dict 传递配置，迁移到 dataclass 后为避免大规模
+    # 重写（当前 7 个文件、26 处下标访问），保留以下 dunder 方法使
+    # PackagingConfig 同时支持属性访问 (config.tool) 与下标访问
+    # (config["tool"])。两套语法等价，调用方可自由选择。
+    #
+    # 这并非"待清理的过渡代码"，而是有意的双模 API：
+    # - 属性访问：类型提示友好，IDE 补全完整
+    # - 下标访问：与历史 dict 代码、JSON 序列化场景兼容
+    # 删除前需先把全部 26 处下标访问改为属性访问。
+
     def get(self, key: str, default: Any = None) -> Any:
         """兼容 dict.get() 调用方式。"""
         return getattr(self, key, default)
 
     def __getitem__(self, key: str) -> Any:
-        """兼容 config["key"] 下标访问（dataclass → dict 过渡期）。"""
+        """兼容 config["key"] 下标访问（与属性访问等价）。"""
         return getattr(self, key)
 
     def __setitem__(self, key: str, value: Any) -> None:
-        """兼容 config["key"] = value 下标赋值（dataclass → dict 过渡期）。"""
+        """兼容 config["key"] = value 下标赋值（与属性赋值等价）。"""
         setattr(self, key, value)
 
     def __contains__(self, key: str) -> bool:

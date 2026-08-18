@@ -23,15 +23,16 @@ class ConfigMarshaller:
         python_path_edit: str,
         gcc_path_edit: str,
         is_nuitka: bool,
-        onefile: bool,
-        console: bool,
-        clean: bool,
-        upx: bool,
-        use_venv: bool,
-        version_info: Dict[str, Any],
-        has_version_info: bool,
-        nuitka_advanced_options: Dict[str, Any],
-        exclude_modules_text: str,
+        is_cx_freeze: bool = False,
+        onefile: bool = True,
+        console: bool = False,
+        clean: bool = True,
+        upx: bool = False,
+        use_venv: bool = True,
+        version_info: Dict[str, Any] = None,
+        has_version_info: bool = False,
+        nuitka_advanced_options: Dict[str, Any] = None,
+        exclude_modules_text: str = "",
     ) -> PackagingConfig:
         """从 UI 控件值构建类型化的打包配置。"""
         script_path = os.path.abspath(script_path_edit.strip()) if script_path_edit.strip() else ""
@@ -45,6 +46,14 @@ class ConfigMarshaller:
                 if m.strip()
             ]
 
+        # 确定打包工具
+        if is_cx_freeze:
+            tool = "cx_freeze"
+        elif is_nuitka:
+            tool = "nuitka"
+        else:
+            tool = "pyinstaller"
+
         return PackagingConfig(
             script_path=script_path,
             project_dir=project_dir,
@@ -52,7 +61,7 @@ class ConfigMarshaller:
             icon_path=icon_path_edit.strip() or None,
             program_name=program_name_edit.strip() or None,
             python_path=python_path_edit.strip() or None,
-            tool="nuitka" if is_nuitka else "pyinstaller",
+            tool=tool,
             gcc_path=gcc_path_edit.strip() or None,
             onefile=onefile,
             console=console,
@@ -62,6 +71,6 @@ class ConfigMarshaller:
             lto=True,
             python_opt=True,
             exclude_modules=exclude_modules,
-            nuitka_advanced_options=nuitka_advanced_options,
+            nuitka_advanced_options=nuitka_advanced_options or {},
             version_info=version_info if has_version_info else {},
         )

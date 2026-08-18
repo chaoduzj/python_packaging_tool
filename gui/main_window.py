@@ -3,10 +3,18 @@ Python打包工具 - 主窗口
 
 本模块实现主应用程序窗口，遵循PyQt6最佳实践：
 1. 关注点分离（UI、逻辑、样式）
-2. 使用QThreadPool处理后台任务
+2. 后台任务通过 threading.Thread + pyqtSignal 跨线程回主线程更新 UI
 3. 全面使用类型提示
 4. 集中式主题管理
-5. 模块化组件组织
+5. 模块化组件组织（对话框已抽离到 gui/dialogs/）
+
+线程模型说明：
+- 长任务（打包、依赖分析、GCC 下载）在 daemon Thread 中执行，
+  通过 log_signal / finished_signal 等 pyqtSignal 把结果投递回主线程。
+- 取消机制：设置 self.cancel_packaging / self.cancel_download 标志位，
+  工作线程在各步骤之间轮询标志位并提前返回；同时 terminate() 子进程。
+- self.thread_pool (QThreadPool.globalInstance()) 当前未启用业务任务，
+  保留作为未来轻量级任务的扩展点。
 """
 
 import ast
@@ -56,8 +64,11 @@ from core.packager import Packager
 from core.packaging.config import PackagingConfig
 
 # 导入重构后的GUI模块
-from gui.controllers.workers import PackagingWorker
+from gui.dialogs.about_dialog import show_about_dialog
+from gui.dialogs.donate_dialog import show_donate_dialog
+from gui.dialogs.feedback_dialog import show_feedback_dialog
 from gui.dialogs.nuitka_options_dialog import NuitkaOptionsDialog
+from gui.dialogs.version_info_dialog import show_version_info_dialog
 from gui.services.config_marshaller import ConfigMarshaller
 from gui.services.icon_auto_loader import IconAutoLoader
 from gui.services.version_info_detector import VersionInfoDetector
@@ -66,12 +77,12 @@ from gui.styles.themes import (
     ThemeMode,
 )
 from gui.widgets.icons import IconGenerator
-from utils.constants import get_nuitka_containing_dir, is_bundled, is_nuitka_compiled
+from utils.constants import SKIP_DIRECTORIES, get_nuitka_containing_dir, is_bundled, is_nuitka_compiled
 from utils.dependency_manager import DependencyManager
 from utils.gcc_downloader import GCCDownloader, validate_mingw_directory
 
 # 导入版本信息
-from version import APP_NAME, AUTHOR_EMAIL, DISPLAY_VERSION, SHOW_VIP_PRIVILEGE, get_about_html
+from version import APP_NAME, AUTHOR_EMAIL, DISPLAY_VERSION, SHOW_VIP_PRIVILEGE, get_about_html, should_show_donate_dialog
 
 
 class MainWindow(QMainWindow):
@@ -79,7 +90,7 @@ class MainWindow(QMainWindow):
     主应用程序窗口 - PyQt6最佳实践实现
 
     主要改进：
-    - 使用QThreadPool处理后台任务
+    - 后台任务通过 daemon Thread + pyqtSignal 跨线程通信
     - 通过ThemeManager进行集中式主题管理
     - 通过IconGenerator分离图标生成
     - 清晰的信号/槽模式用于线程通信
@@ -119,18 +130,63 @@ class MainWindow(QMainWindow):
         # 这样GCC配置等可以在重启后保留
         user_config_dir = os.path.join(os.path.expanduser("~"), ".python_packaging_tool")
         try:
+            # 仅在目录首次创建时收紧权限；已存在的不强改（尊重用户自定义权限）
+            is_new_dir = not os.path.exists(user_config_dir)
             os.makedirs(user_config_dir, exist_ok=True)
+            if is_new_dir:
+                self._restrict_dir_permissions(user_config_dir)
             config_dir = user_config_dir
         except Exception:
             config_dir = os.path.join(self.app_dir, "config")
             try:
+                is_new_dir = not os.path.exists(config_dir)
                 os.makedirs(config_dir, exist_ok=True)
+                if is_new_dir:
+                    self._restrict_dir_permissions(config_dir)
             except Exception:
                 pass
 
         self.config_dir = config_dir
         self.gcc_config_file = os.path.join(config_dir, "gcc_config.json")
         self.theme_config_file = os.path.join(config_dir, "theme_config.json")
+
+    @staticmethod
+    def _restrict_dir_permissions(dir_path: str) -> None:
+        """收紧用户配置目录权限，仅允许当前用户访问。
+
+        - Windows：通过 icacls 移除 Users 组的访问权限，仅保留当前用户
+          与 SYSTEM（防止同机其他标准用户读取 GCC 配置等）
+        - Linux/macOS：设置 0o700（仅所有者可读写执行）
+        - 失败时不抛异常，仅打印警告（权限收紧是防御性措施，不应阻断启动）
+
+        注意：仅在目录首次创建时调用，已存在的目录不修改（避免破坏
+        用户自定义的权限配置，如符号链接、网络盘等场景）。
+        """
+        try:
+            if sys.platform == "win32":
+                # /inheritance:r 移除继承的 ACE，然后显式授予当前用户和 SYSTEM
+                import subprocess
+
+                username = os.environ.get("USERNAME") or os.environ.get("USER", "")
+                if not username:
+                    return
+                subprocess.run(
+                    [
+                        "icacls", dir_path,
+                        "/inheritance:r",
+                        "/grant:r", f"{username}:(OI)(CI)F",  # 完全控制，应用到子项
+                        "/grant:r", "SYSTEM:(OI)(CI)F",
+                    ],
+                    capture_output=True,
+                    timeout=10,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+            else:
+                # Unix: rwx------ (仅所有者)
+                os.chmod(dir_path, 0o700)
+        except Exception as e:
+            # 权限收紧失败不影响主流程
+            print(f"警告：收紧配置目录权限失败（不影响使用）: {e}")
 
     def _init_managers(self) -> None:
         """初始化管理器对象"""
@@ -170,7 +226,6 @@ class MainWindow(QMainWindow):
         self.is_packaging = False
         self.cancel_packaging = False
         self.packaging_process: Optional[subprocess.Popen] = None
-        self._current_packaging_worker: Optional[PackagingWorker] = None
 
         # 跟踪之前的项目目录和脚本路径以进行变更检测
         self._previous_project_dir: Optional[str] = None
@@ -383,387 +438,40 @@ class MainWindow(QMainWindow):
         menubar.addAction(donate_action)
 
     def _show_feedback_dialog(self) -> None:
-        """显示问题反馈对话框"""
-        dialog = QDialog(self)
-        dialog.setWindowTitle("问题反馈")
-        dialog.setMinimumWidth(600)
-        dialog.setMinimumHeight(500)
-
-        # 应用与主窗口一致的样式
-        colors = self.theme_manager.colors
-        dialog.setStyleSheet(f"""
-            QDialog {{
-                background-color: {colors.background_primary};
-                color: {colors.text_primary};
-            }}
-            QLabel {{
-                color: {colors.text_primary};
-                background-color: transparent;
-            }}
-            QTextEdit {{
-                background-color: {colors.background_secondary};
-                border: 1px solid {colors.border_primary};
-                border-radius: 3px;
-                padding: 5px;
-                color: {colors.text_primary};
-            }}
-            QPushButton {{
-                background-color: {colors.accent_primary};
-                color: white;
-                border: none;
-                border-radius: 3px;
-                padding: 8px 16px;
-                min-width: 80px;
-            }}
-            QPushButton:hover {{
-                background-color: {colors.accent_hover};
-            }}
-            QPushButton:pressed {{
-                background-color: {colors.accent_pressed};
-            }}
-        """)
-
-        layout = QVBoxLayout(dialog)
-
-        # 软件信息（包含版本号）
-        info_label = QLabel(f"<h3>{APP_NAME}</h3><p><b>软件版本：</b>{DISPLAY_VERSION}</p>")
-        layout.addWidget(info_label)
-
-        # 获取当前配置信息
-        config = self.get_config()
-        config_text = f"""
-<b>当前打包配置：</b><br>
-- 打包工具: {config.tool}<br>
-- 单文件模式: {"是" if config.onefile else "否"}<br>
-- 显示控制台: {"是" if config.console else "否"}<br>
-- 清理构建缓存: {"是" if config.clean else "否"}<br>
-- 使用UPX压缩: {"是" if config.upx else "否"}<br>
-- 脚本路径: {config.script_path or "N/A"}<br>
-- 项目目录: {config.project_dir or "N/A"}<br>
-- 输出目录: {config.output_dir or "N/A"}<br>
-"""
-        config_label = QLabel(config_text)
-        config_label.setWordWrap(True)
-        layout.addWidget(config_label)
-
-        # 日志信息
-        log_label = QLabel("<b>日志输出：</b>")
-        layout.addWidget(log_label)
-
-        log_text = QTextEdit()
-        log_text.setReadOnly(True)
-        log_text.setPlainText(self.log_text.toPlainText())
-        log_text.setMaximumHeight(200)
-        layout.addWidget(log_text)
-
-        # 专属特权说明（由 version.py 中的 SHOW_VIP_PRIVILEGE 开关控制）
-        if SHOW_VIP_PRIVILEGE:
-            highlight_color = "#FFD700" if self.theme_manager.is_dark else "#FF0000"
-            vip_label = QLabel(
-                f"<br><span style='color: {highlight_color};'>捐赠用户在遇到打包问题时，将<b>优先获得技术支持和问题排查协助</b>。</span><br>"
-            )
-            layout.addWidget(vip_label)
-
-        # 作者邮箱
-        email_label = QLabel(f"<b>作者邮箱：</b> {AUTHOR_EMAIL}")
-        email_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        email_label.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-
-        def show_email_context_menu(pos):
-            """显示邮箱的中文右键菜单"""
-            context_menu = QMenu(email_label)
-
-            # 设置菜单样式
-            context_menu.setStyleSheet(f"""
-                QMenu {{
-                    background-color: {colors.background_secondary};
-                    border: 1px solid {colors.border_primary};
-                    color: {colors.text_primary};
-                }}
-                QMenu::item {{
-                    padding: 5px 20px;
-                    background-color: {colors.background_secondary};
-                    color: {colors.text_primary};
-                }}
-                QMenu::item:selected {{
-                    background-color: {colors.accent_primary};
-                    color: white;
-                }}
-            """)
-
-            # 复制动作
-            copy_action = QAction("复制", email_label)
-            copy_action.triggered.connect(lambda: self._copy_selected_text(email_label))
-            context_menu.addAction(copy_action)
-
-            context_menu.exec(email_label.mapToGlobal(pos))
-
-        email_label.customContextMenuRequested.connect(show_email_context_menu)
-        layout.addWidget(email_label)
-
-        # 提示信息
-        tip_label = QLabel("<br><i>请将以上信息复制后发送到邮箱，以便我们更好地帮助您解决问题。</i>")
-        tip_label.setWordWrap(True)
-        layout.addWidget(tip_label)
-
-        # 按钮区
-        btn_layout = QHBoxLayout()
-
-        # 一键复制按钮
-        copy_btn = QPushButton("一键复制")
-
-        def copy_all():
-            full_text = f"""{APP_NAME} - 问题反馈
-软件版本：{DISPLAY_VERSION}
-
-当前打包配置：
-- 打包工具: {config.get("tool", "N/A")}
-- 单文件模式: {"是" if config.get("onefile") else "否"}
-- 显示控制台: {"是" if config.get("console") else "否"}
-- 清理构建缓存: {"是" if config.get("clean") else "否"}
-- 使用UPX压缩: {"是" if config.get("upx") else "否"}
-- 脚本路径: {config.get("script_path") or "N/A"}
-- 项目目录: {config.get("project_dir") or "N/A"}
-- 输出目录: {config.get("output_dir") or "N/A"}
-
-日志输出：
-{self.log_text.toPlainText()}
-"""
-            clipboard = QApplication.clipboard()
-            if clipboard:
-                clipboard.setText(full_text)
-                QMessageBox.information(dialog, "提示", "已复制到剪贴板！")
-
-        copy_btn.setProperty("buttonType", "primary")
-        copy_btn.clicked.connect(copy_all)
-        btn_layout.addWidget(copy_btn)
-
-        btn_layout.addStretch()
-
-        close_btn = QPushButton("关闭")
-        close_btn.clicked.connect(dialog.close)
-        btn_layout.addWidget(close_btn)
-
-        layout.addLayout(btn_layout)
-        dialog.exec()
-
-    def _copy_selected_text(self, label: QLabel) -> None:
-        """复制标签中选中的文本到剪贴板"""
-        selected_text = label.selectedText()
-        if selected_text:
-            clipboard = QApplication.clipboard()
-            if clipboard:
-                clipboard.setText(selected_text)
+        """显示问题反馈对话框（实现已抽离到 gui.dialogs.feedback_dialog）。"""
+        show_feedback_dialog(
+            parent=self,
+            theme_manager=self.theme_manager,
+            app_name=APP_NAME,
+            display_version=DISPLAY_VERSION,
+            author_email=AUTHOR_EMAIL,
+            show_vip_privilege=SHOW_VIP_PRIVILEGE,
+            config=self.get_config(),
+            log_text=self.log_text.toPlainText(),
+        )
 
     def _show_donate_dialog(self) -> None:
-        """显示捐赠对话框"""
-        dialog = QDialog(self)
-        dialog.setWindowTitle("☕ 请作者喝杯咖啡")
-        dialog.setMinimumWidth(600)
-        dialog.setMinimumHeight(450)
-
-        # 应用与主窗口一致的样式
-        colors = self.theme_manager.colors
-        dialog.setStyleSheet(f"""
-            QDialog {{
-                background-color: {colors.background_primary};
-            }}
-            QLabel {{
-                color: {colors.text_primary};
-            }}
-        """)
-
-        layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(30, 20, 30, 20)
-        layout.setSpacing(15)
-
-        # 感谢语和特权说明
-        highlight_color = "#FFD700" if self.theme_manager.is_dark else "#FF0000"
-        desc_label = QLabel(
-            "感谢您的支持！您的捐赠是我们持续维护和优化的最大动力。<br><br>"
-            "<b>💡 专属福利：</b><br>"
-            f"<span style='color: {highlight_color};'>捐赠用户在遇到打包问题时，将<b>优先获得技术支持和问题排查协助</b>。</span><br>"
-            "（在反馈问题时，请附带您的捐赠截图或备注信息哦）"
-        )
-        desc_label.setWordWrap(True)
-        desc_label.setStyleSheet("font-size: 14px; line-height: 1.5;")
-        layout.addWidget(desc_label)
-
-        # 二维码区域
-        qr_layout = QHBoxLayout()
-        qr_layout.setSpacing(40)
-
-        def create_qr_widget(img_name: str, title: str) -> QWidget:
-            widget = QWidget()
-            v_layout = QVBoxLayout(widget)
-            v_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            v_layout.setContentsMargins(0, 0, 0, 0)
-
-            # 图片
-            img_label = QLabel()
-            # 打包后 exe 同级目录搜索图片（cx_Freeze/PyInstaller/Nuitka 均适用）
-            if getattr(sys, "frozen", False) or "__compiled__" in dir():
-                base = os.path.dirname(sys.executable)
-            else:
-                base = os.path.dirname(os.path.dirname(__file__))
-            img_path = os.path.join(base, "resources", img_name)
-            if os.path.exists(img_path):
-                pixmap = QPixmap(img_path)
-                scaled_pixmap = pixmap.scaled(
-                    220,
-                    300,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-                img_label.setPixmap(scaled_pixmap)
-            else:
-                img_label.setText(f"[缺少图片文件: {img_name}]")
-
-            img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            v_layout.addWidget(img_label)
-
-            # 标题
-            title_label = QLabel(title)
-            title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            title_label.setStyleSheet("font-weight: bold; font-size: 15px; margin-top: 5px;")
-            v_layout.addWidget(title_label)
-
-            return widget
-
-        # 支付宝
-        alipay_widget = create_qr_widget("alipay.jpg", "支付宝")
-        qr_layout.addWidget(alipay_widget)
-
-        # 微信
-        wechat_widget = create_qr_widget("wechat_pay.png", "微信支付")
-        qr_layout.addWidget(wechat_widget)
-
-        layout.addLayout(qr_layout)
-
-        # 底部关闭按钮（前3秒禁用，防止误关）
-        btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
-        close_btn = QPushButton("感谢支持 (3s)")
-        close_btn.setMinimumWidth(120)
-        close_btn.setMinimumHeight(35)
-        close_btn.setProperty("buttonType", "primary")
-        close_btn.setEnabled(False)
-        close_btn.clicked.connect(dialog.accept)
-        btn_layout.addWidget(close_btn)
-        layout.addLayout(btn_layout)
-
-        # 3 秒倒计时，逐步启用关闭按钮
-        self._countdown = 3
-
-        def tick():
-            self._countdown -= 1
-            if self._countdown > 0:
-                close_btn.setText(f"感谢支持 ({self._countdown}s)")
-            else:
-                close_btn.setText("感谢支持")
-                close_btn.setEnabled(True)
-                timer.stop()
-
-        timer = QTimer(dialog)
-        timer.timeout.connect(tick)
-        timer.start(1000)
-
-        dialog.exec()
+        """显示捐赠对话框（实现已抽离到 gui.dialogs.donate_dialog）。"""
+        show_donate_dialog(self, self.theme_manager, __file__)
 
     def _check_launch_count_and_donate(self) -> None:
-        """检查软件打开次数并根据规则弹出捐赠框"""
+        """检查软件打开次数并根据规则弹出捐赠框。
+
+        弹出规则由 version.py 中的 DONATE_PROMPT_INITIAL_COUNTS 和
+        DONATE_PROMPT_INTERVAL 控制，便于无需改代码即可调整频率。
+        """
         settings = QSettings("PythonPackagingTool", "LaunchCount")
         count = settings.value("count", 0, type=int)
 
         count += 1
         settings.setValue("count", count)
 
-        # 目标次数：5, 10, 20, 30, 40...
-        target_counts = [5, 10]
-        if count > 10 and count % 10 == 0:
-            target_counts.append(count)
-
-        if count in target_counts:
+        if should_show_donate_dialog(count):
             self._show_donate_dialog()
 
     def _show_about_dialog(self) -> None:
-        """显示关于对话框（支持文本复制）"""
-        dialog = QDialog(self)
-        dialog.setWindowTitle("关于")
-        dialog.setMinimumWidth(500)
-        dialog.setMinimumHeight(350)
-
-        # 设置对话框图标（与主窗口一致）
-        dialog.setWindowIcon(self.windowIcon())
-
-        # 应用与主窗口一致的样式
-        colors = self.theme_manager.colors
-        dialog.setStyleSheet(f"""
-            QDialog {{
-                background-color: {colors.background_primary};
-                color: {colors.text_primary};
-            }}
-            QLabel {{
-                color: {colors.text_primary};
-                background-color: transparent;
-            }}
-            QTextBrowser {{
-                background-color: {colors.background_secondary};
-                border: 1px solid {colors.border_primary};
-                border-radius: 3px;
-                padding: 10px;
-                color: {colors.text_primary};
-            }}
-            QPushButton {{
-                background-color: {colors.accent_primary};
-                color: white;
-                border: none;
-                border-radius: 3px;
-                padding: 8px 16px;
-                min-width: 80px;
-            }}
-            QPushButton:hover {{
-                background-color: {colors.accent_hover};
-            }}
-            QPushButton:pressed {{
-                background-color: {colors.accent_pressed};
-            }}
-        """)
-
-        layout = QVBoxLayout(dialog)
-
-        # 顶部图标和标题区域
-        top_layout = QHBoxLayout()
-
-        # 添加应用图标
-        icon_label = QLabel()
-        icon_pixmap = self.windowIcon().pixmap(64, 64)  # 64x64 图标
-        if not icon_pixmap.isNull():
-            icon_label.setPixmap(icon_pixmap)
-        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        top_layout.addWidget(icon_label)
-
-        top_layout.addSpacing(10)
-
-        # 使用 QTextBrowser 显示内容，支持选择和复制
-        text_browser = QTextBrowser()
-        text_browser.setOpenExternalLinks(False)
-        text_browser.setHtml(get_about_html())
-        text_browser.setMinimumHeight(150)
-        top_layout.addWidget(text_browser)
-
-        layout.addLayout(top_layout)
-
-        # 关闭按钮
-        btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
-
-        close_btn = QPushButton("关闭")
-        close_btn.clicked.connect(dialog.close)
-        btn_layout.addWidget(close_btn)
-
-        layout.addLayout(btn_layout)
-        dialog.exec()
+        """显示关于对话框（实现已抽离到 gui.dialogs.about_dialog）。"""
+        show_about_dialog(self, self.theme_manager, self.windowIcon(), get_about_html())
 
     def _create_file_selection_group(self, parent_layout: QVBoxLayout) -> None:
         """创建文件选择组"""
@@ -1069,280 +777,77 @@ class MainWindow(QMainWindow):
         script_path = self.script_path_edit.text().strip() if hasattr(self, "script_path_edit") else ""
         return self.version_detector.detect(project_dir, script_path)
 
+    def _find_version_info_source_file(self, project_dir: str, script_path: str) -> Optional[str]:
+        """查找实际使用的版本信息源文件路径（用于在对话框中显示来源提示）。
+
+        查找顺序：项目根目录 → 常见子目录（core/src/lib/utils/config）→ 递归查找 → 脚本本身。
+        """
+        if project_dir and os.path.isdir(project_dir):
+            # 1. 项目根目录
+            for vf in ["version.py", "main.py"]:
+                vf_path = os.path.join(project_dir, vf)
+                if os.path.exists(vf_path):
+                    return vf_path
+
+            # 2. 常见子目录
+            skip_dirs = set(SKIP_DIRECTORIES) | {".tox", ".pytest_cache", "egg-info", ".eggs"}
+            priority_dirs = ["core", "src", "lib", "utils", "config"]
+            for priority_dir in priority_dirs:
+                for vf in ["version.py", "main.py"]:
+                    vf_path = os.path.join(project_dir, priority_dir, vf)
+                    if os.path.exists(vf_path):
+                        return vf_path
+
+            # 3. 递归查找
+            for root, dirs, files in os.walk(project_dir):
+                dirs[:] = [d for d in dirs if d not in skip_dirs and not d.startswith(".")]
+                for vf in ["version.py", "main.py"]:
+                    if vf in files:
+                        return os.path.join(root, vf)
+
+        # 4. 脚本本身
+        if script_path and os.path.isfile(script_path):
+            if script_path.lower().endswith((".py", ".pyw")):
+                return script_path
+
+        return None
+
     def _show_version_info_dialog(self) -> None:
-        """显示版权信息配置对话框"""
-        # 尝试从项目目录检测版本信息
+        """显示版权信息配置对话框（实现已抽离到 gui.dialogs.version_info_dialog）。"""
+        # 1. 检测版本信息
         detected_info = self._detect_version_info_from_project()
+        project_dir = self.project_dir_edit.text().strip() if hasattr(self, "project_dir_edit") else ""
+        script_path = self.script_path_edit.text().strip() if hasattr(self, "script_path_edit") else ""
+        source_file = self._find_version_info_source_file(project_dir, script_path) if any(detected_info.values()) else None
 
-        # 检查是否为 Nuitka 打包（影响是否使用中文）
+        # 2. Nuitka SDK 支持检测
         is_nuitka = self.nuitka_radio.isChecked()
-
-        # 检测 Windows SDK 支持（用于 Nuitka 中文版本信息）
         sdk_supported = False
         sdk_message = ""
         if is_nuitka:
             from core.packager import Packager
-
             temp_packager = Packager()
             sdk_supported, sdk_message = temp_packager.check_windows_sdk_support()
 
-        # 合并检测到的信息和现有信息
-        # 优先使用检测到的值，直接覆盖现有值
+        # 3. 委托给独立对话框组件
+        result_info = show_version_info_dialog(
+            parent=self,
+            theme_manager=self.theme_manager,
+            current_info=self.version_info,
+            detected_info=detected_info,
+            is_nuitka=is_nuitka,
+            sdk_supported=sdk_supported,
+            sdk_message=sdk_message,
+            source_file=source_file,
+            project_dir=project_dir or None,
+        )
 
-        # 产品名称：优先使用 APP_NAME，不存在则使用 APP_NAME_EN
-        if detected_info.get("product_name"):
-            self.version_info["product_name"] = detected_info["product_name"]
-        elif detected_info.get("product_name_en"):
-            self.version_info["product_name"] = detected_info["product_name_en"]
-
-        # 文件描述：优先使用 DESCRIPTION，不存在则使用 DESCRIPTION_EN
-        if detected_info.get("file_description"):
-            self.version_info["file_description"] = detected_info["file_description"]
-        elif detected_info.get("file_description_en"):
-            self.version_info["file_description"] = detected_info["file_description_en"]
-
-        # 版权信息：直接使用检测到的值（如果存在）
-        if detected_info.get("copyright"):
-            self.version_info["copyright"] = detected_info["copyright"]
-
-        # 版本号：直接使用检测到的值（如果存在）
-        if detected_info.get("version"):
-            self.version_info["version"] = detected_info["version"]
-
-        dialog = QDialog(self)
-        dialog.setWindowTitle("添加版权信息")
-        dialog.setMinimumWidth(450)
-
-        # 设置对话框标志，确保不会影响父窗口
-        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
-
-        # 应用与主窗口一致的样式
-        colors = self.theme_manager.colors
-        dialog.setStyleSheet(f"""
-            QDialog {{
-                background-color: {colors.background_primary};
-                color: {colors.text_primary};
-            }}
-            QLabel {{
-                color: {colors.text_primary};
-                background-color: transparent;
-            }}
-            QLineEdit {{
-                background-color: {colors.background_secondary};
-                border: 1px solid {colors.border_primary};
-                border-radius: 3px;
-                padding: 5px;
-                color: {colors.text_primary};
-            }}
-            QLineEdit:focus {{
-                border: 1px solid {colors.accent_primary};
-            }}
-            QPushButton {{
-                background-color: {colors.accent_primary};
-                color: white;
-                border: none;
-                border-radius: 3px;
-                padding: 8px 16px;
-                min-width: 80px;
-            }}
-            QPushButton:hover {{
-                background-color: {colors.accent_hover};
-            }}
-            QPushButton:pressed {{
-                background-color: {colors.accent_pressed};
-            }}
-        """)
-
-        layout = QVBoxLayout(dialog)
-
-        # 检查是否为Nuitka打包方式，如果是则显示提示
-        if is_nuitka:
-            if sdk_supported:
-                # 检测到 Windows SDK，支持中文
-                tip_label = QLabel(f"""
-<b>✓ 支持中文版本信息</b><br>
-{sdk_message}<br>
-<span style="color: {colors.success};">您可以填写中文信息，系统将自动处理。</span>
-                """)
-                tip_label.setWordWrap(True)
-                tip_label.setStyleSheet(f"""
-                    QLabel {{
-                        background-color: {colors.background_secondary};
-                        border: 1px solid {colors.success};
-                        border-radius: 5px;
-                        padding: 10px;
-                        color: {colors.text_primary};
-                    }}
-                """)
-            else:
-                # 未检测到 Windows SDK，建议使用英文
-                tip_label = QLabel(f"""
-<b>提示：</b><br>当前Nuitka打包默认请填写英文信息。<br>
-{sdk_message}<br><br>
-如需支持中文信息，请先安装以下任一组件：<br>
-• <b>Windows SDK</b> (推荐)<br>
-• <b>Visual Studio Build Tools</b><br>
-• <b>Visual Studio</b> (任意版本)
-                """)
-                tip_label.setWordWrap(True)
-                tip_label.setStyleSheet(f"""
-                    QLabel {{
-                        background-color: {colors.background_secondary};
-                        border: 1px solid {colors.border_primary};
-                        border-radius: 5px;
-                        padding: 10px;
-                        color: {colors.text_primary};
-                    }}
-                """)
-            layout.addWidget(tip_label)
-            layout.addSpacing(10)
-
-        # 显示检测到版本信息的提示
-        if any(detected_info.values()):
-            # 重新检测以确定实际找到的文件路径
-            project_dir = self.project_dir_edit.text().strip() if hasattr(self, "project_dir_edit") else ""
-            script_path = self.script_path_edit.text().strip() if hasattr(self, "script_path_edit") else ""
-
-            source_text = ""
-            found_file = None
-
-            # 查找实际使用的文件路径
-            if project_dir and os.path.isdir(project_dir):
-                # 先检查根目录
-                for vf in ["version.py", "main.py"]:
-                    vf_path = os.path.join(project_dir, vf)
-                    if os.path.exists(vf_path):
-                        found_file = vf_path
-                        break
-
-                # 如果根目录没找到，查找子目录
-                if not found_file:
-                    from utils.constants import SKIP_DIRECTORIES
-
-                    skip_dirs = set(SKIP_DIRECTORIES) | {".tox", ".pytest_cache", "egg-info", ".eggs"}
-
-                    priority_dirs = ["core", "src", "lib", "utils", "config"]
-
-                    # 先查找常见子目录
-                    for priority_dir in priority_dirs:
-                        for vf in ["version.py", "main.py"]:
-                            vf_path = os.path.join(project_dir, priority_dir, vf)
-                            if os.path.exists(vf_path):
-                                found_file = vf_path
-                                break
-                        if found_file:
-                            break
-
-                    # 如果优先目录没找到，递归查找
-                    if not found_file:
-                        for root, dirs, files in os.walk(project_dir):
-                            dirs[:] = [d for d in dirs if d not in skip_dirs and not d.startswith(".")]
-                            for vf in ["version.py", "main.py"]:
-                                if vf in files:
-                                    found_file = os.path.join(root, vf)
-                                    break
-                            if found_file:
-                                break
-
-            # 如果还是没找到，使用脚本文件
-            if not found_file and script_path and os.path.isfile(script_path):
-                if script_path.lower().endswith((".py", ".pyw")):
-                    found_file = script_path
-
-            # 生成提示文本
-            if found_file:
-                # 计算相对路径用于显示
-                if project_dir and found_file.startswith(project_dir):
-                    rel_path = os.path.relpath(found_file, project_dir)
-                    source_text = f"项目 {rel_path}"
-                else:
-                    source_text = f"文件 {os.path.basename(found_file)}"
-
-            if source_text:
-                detect_tip = QLabel(f"✓ 已从 {source_text} 中检测到版本信息")
-            else:
-                detect_tip = QLabel("✓ 已检测到版本信息")
-            detect_tip.setStyleSheet(f"color: {colors.success}; font-size: 12px;")
-            layout.addWidget(detect_tip)
-            layout.addSpacing(5)
-
-        # 表单布局
-        form_layout = QFormLayout()
-
-        # 产品名称
-        self.version_product_name_edit = QLineEdit()
-        self.version_product_name_edit.setText(self.version_info.get("product_name", ""))
-        self.version_product_name_edit.setPlaceholderText("eg. My Application")
-        form_layout.addRow("产品名称:", self.version_product_name_edit)
-
-        # 公司名称
-        self.version_company_name_edit = QLineEdit()
-        self.version_company_name_edit.setText(self.version_info.get("company_name", ""))
-        self.version_company_name_edit.setPlaceholderText("eg. XXX Tech Co., Ltd.")
-        form_layout.addRow("公司名称:", self.version_company_name_edit)
-
-        # 文件描述
-        self.version_file_desc_edit = QLineEdit()
-        self.version_file_desc_edit.setText(self.version_info.get("file_description", ""))
-        self.version_file_desc_edit.setPlaceholderText("eg. This is a useful tool")
-        form_layout.addRow("文件描述:", self.version_file_desc_edit)
-
-        # 版权信息
-        self.version_copyright_edit = QLineEdit()
-        self.version_copyright_edit.setText(self.version_info.get("copyright", "Copyright © 2026"))
-        self.version_copyright_edit.setPlaceholderText("eg. Copyright © 2024 XXX Company")
-        form_layout.addRow("版权信息:", self.version_copyright_edit)
-
-        # 版本号
-        self.version_version_edit = QLineEdit()
-        self.version_version_edit.setText(self.version_info.get("version", "1.0.0"))
-        self.version_version_edit.setPlaceholderText("eg. 1.0.0")
-        form_layout.addRow("版本号:", self.version_version_edit)
-
-        layout.addLayout(form_layout)
-
-        # 按钮（使用中文按钮）
-        btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
-
-        ok_btn = QPushButton("确定")
-        ok_btn.setProperty("buttonType", "primary")
-        ok_btn.clicked.connect(dialog.accept)
-        btn_layout.addWidget(ok_btn)
-
-        cancel_btn = QPushButton("取消")
-        cancel_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {colors.background_tertiary};
-                color: {colors.text_primary};
-                border: 1px solid {colors.border_primary};
-            }}
-            QPushButton:hover {{
-                background-color: {colors.border_secondary};
-            }}
-        """)
-        cancel_btn.clicked.connect(dialog.reject)
-        btn_layout.addWidget(cancel_btn)
-
-        layout.addLayout(btn_layout)
-
-        # 显示对话框并处理结果
-        result = dialog.exec()
-
-        # 处理对话框结果
-        if result == QDialog.DialogCode.Accepted:
-            # 保存版权信息
-            self.version_info = {
-                "product_name": self.version_product_name_edit.text().strip(),
-                "company_name": self.version_company_name_edit.text().strip(),
-                "file_description": self.version_file_desc_edit.text().strip(),
-                "copyright": self.version_copyright_edit.text().strip(),
-                "version": self.version_version_edit.text().strip() or "1.0.0",
-            }
+        # 4. 处理结果
+        if result_info is not None:
+            self.version_info = result_info
             self.append_log(f"已配置版权信息: {self.version_info.get('product_name', 'N/A')}")
         else:
-            # 用户取消，直接取消勾选
-            # clicked 信号只在用户点击时触发，setChecked 不会触发，所以无需 blockSignals
+            # 用户取消，取消勾选（setChecked 不会触发 clicked 信号，无需 blockSignals）
             self.version_info_check.setChecked(False)
 
     def _set_window_icon(self) -> None:
@@ -1782,8 +1287,6 @@ class MainWindow(QMainWindow):
             return True
 
         if project_dir and os.path.isdir(project_dir):
-            from utils.constants import SKIP_DIRECTORIES
-
             skip_dirs = set(SKIP_DIRECTORIES)
             for root, dirs, files in os.walk(project_dir):
                 dirs[:] = [d for d in dirs if d not in skip_dirs]
@@ -2510,10 +2013,6 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 self.append_log(f"终止进程时出错: {str(e)}")
 
-        # Cancel worker if using QThreadPool
-        if self._current_packaging_worker:
-            self._current_packaging_worker.cancel()
-
         # 更新按钮文本显示取消中状态，但不完全重置
         # 状态重置会在 on_packaging_finished 中完成
         self.package_btn.setText("取消中...")
@@ -2628,7 +2127,6 @@ class MainWindow(QMainWindow):
         self.is_packaging = False
         self.cancel_packaging = False
         self.packaging_process = None
-        self._current_packaging_worker = None
         self.package_btn.setText("开始打包")
         self.package_btn.setEnabled(True)
         self._reset_package_button_style()

@@ -175,14 +175,52 @@ class IconProcessor:
         """
         生成一段内嵌的辅助脚本源码字符串。
 
-        该脚本包含图标转换所需的全部逻辑，可在任意安装了 Pillow 的
-        Python 环境中独立运行。
+        优先在运行时读取同目录的 ``icon_convert_helper.py``，确保内嵌副本
+        始终与外部文件保持同步，消除"两份代码手动维护"的负担。
+
+        仅当所有读取尝试都失败时（极端兜底场景，如打包后资源缺失），
+        才返回类属性 ``_INLINE_HELPER_FALLBACK`` 中的硬编码副本，保证基本可用性。
 
         Returns:
             完整的 Python 脚本源码
         """
-        # 这里直接返回一段自包含的脚本
-        return r'''
+        # 优先从外部文件读取（开发态与正常打包态均能命中）
+        this_dir = os.path.dirname(os.path.abspath(__file__))
+        candidate_paths = [
+            os.path.join(this_dir, "icon_convert_helper.py"),
+        ]
+        # PyInstaller _MEIPASS 解包目录
+        if hasattr(sys, "_MEIPASS"):
+            candidate_paths.append(
+                os.path.join(sys._MEIPASS, "core", "packaging", "icon_convert_helper.py")  # type: ignore[attr-defined]
+            )
+        # Nuitka onefile 解包目录
+        try:
+            from utils.constants import get_nuitka_containing_dir
+            nuitka_dir = get_nuitka_containing_dir()
+            if nuitka_dir:
+                candidate_paths.append(
+                    os.path.join(nuitka_dir, "core", "packaging", "icon_convert_helper.py")
+                )
+        except Exception:
+            pass
+
+        for path in candidate_paths:
+            try:
+                if os.path.isfile(path):
+                    with open(path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    if content.strip():
+                        return content
+            except Exception:
+                continue
+
+        # 极端兜底：所有外部文件均不可读，返回硬编码副本
+        return self._INLINE_HELPER_FALLBACK
+
+    # 硬编码兜底脚本（与 icon_convert_helper.py 内容保持一致；
+    # 仅在外部文件全部读取失败时使用，作为最后防线保证基本可用性）
+    _INLINE_HELPER_FALLBACK: str = r'''
 import io
 import json
 import os

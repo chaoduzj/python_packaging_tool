@@ -65,6 +65,45 @@ def is_bundled() -> bool:
     return is_nuitka_compiled() or is_pyinstaller_bundled()
 
 
+# CJK 表意文字 Unicode 范围（含扩展 A/B 区，覆盖中日韩常用字与生僻字）
+# - 基本区:        U+4E00 - U+9FFF        （约 2 万常用汉字）
+# - 扩展 A 区:     U+3400 - U+4DBF        （罕见字、姓名用字）
+# - 扩展 B 区:     U+20000 - U+2A6DF      （生僻字、古籍字）
+# - 扩展 B 补遗:   U+2A6E0 - U+2B81F      （CJK Ext B 补充，含 U+2A6E6 等）
+# - 扩展 C-F 区:   U+2A700 - U+2EBEF      （更生僻字）
+# - 兼容表意文字:  U+F900 - U+FAFF
+# 因 Python 字符串按码点迭代，U+20000 以上的字会作为单个 char 出现。
+_CJK_RANGES = (
+    (0x4E00, 0x9FFF),
+    (0x3400, 0x4DBF),
+    (0x20000, 0x2B81F),  # 扩展 B 区 + 补遗（合并相邻区段，简化判断）
+    (0x2A700, 0x2EBEF),  # 扩展 C/D/E/F（与上面重叠无害，命中即返回）
+    (0xF900, 0xFAFF),
+)
+
+
+def has_chinese(text: str) -> bool:
+    """检查字符串中是否包含 CJK 表意文字（含基本区与扩展 A/B/C-F 区）。
+
+    覆盖范围比 ``any('\\u4e00' <= c <= '\\u9fff' ...)`` 更广，
+    能识别扩展区中的生僻字、姓名用字（如 𠮷、𫝆 等）。
+
+    Args:
+        text: 待检测字符串
+
+    Returns:
+        包含任意 CJK 字符返回 True；空字符串或无 CJK 字符返回 False
+    """
+    if not text:
+        return False
+    for char in text:
+        code = ord(char)
+        for low, high in _CJK_RANGES:
+            if low <= code <= high:
+                return True
+    return False
+
+
 def get_nuitka_containing_dir() -> str:
     """获取 Nuitka onefile 解包后的临时目录路径。
 

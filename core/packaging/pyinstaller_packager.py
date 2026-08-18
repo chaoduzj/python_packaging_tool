@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from core.packaging.base import CREATE_NO_WINDOW, BasePackager, verify_tool
+from utils.constants import SKIP_DIRECTORIES
 
 
 class PyInstallerPackager(BasePackager):
@@ -292,8 +293,6 @@ class PyInstallerPackager(BasePackager):
 
         跳过虚拟环境、构建目录等无关目录。
         """
-        from utils.constants import SKIP_DIRECTORIES
-
         skip_dirs = set(SKIP_DIRECTORIES) | {
             ".github", ".tox", ".mypy_cache", "logs", "output",
         }

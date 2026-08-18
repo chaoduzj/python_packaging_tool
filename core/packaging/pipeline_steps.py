@@ -1,8 +1,13 @@
 """
-打包流水线步骤 — 从 Packager.package() 12 步流程中提取的核心阶段。
+打包流水线步骤 — 从传统 12 步打包流程中提取的核心阶段。
 
 每个 Step 遵循 PackagingStep 协议，通过委托 Packager 的已验证方法
-保证与传统 package() 路径严格等价。
+（_get_python_path / _setup_venv_if_needed / _build_pack_config /
+ _execute_build / _post_process_version_info / _cleanup_temp_files 等）
+保证与历史 package() 路径严格等价。
+
+注：本文件中各 Step 的注释编号 (Step 1 ~ Step 16) 反映 build_pipeline()
+中实际的注册顺序，便于阅读时与 packager.py:build_pipeline() 对齐。
 """
 
 from typing import Any, Dict
@@ -93,7 +98,7 @@ class ChinesePathCheckStep(PackagingStep):
 
 
 # =============================================================================
-#  Step 4 — 依赖分析
+#  Step 6 — 依赖分析
 # =============================================================================
 
 class DependencyAnalysisStep(PackagingStep):
@@ -180,7 +185,7 @@ class PackagingToolInstallStep(PackagingStep):
 
 
 # =============================================================================
-#  Step 5 — 输出目录准备
+#  Step 4 — 输出目录准备
 # =============================================================================
 
 class OutputDirStep(PackagingStep):
@@ -205,7 +210,7 @@ class OutputDirStep(PackagingStep):
 
 
 # =============================================================================
-#  Step — Qt 框架检测
+#  Step 5 — Qt 框架检测
 # =============================================================================
 
 class QtFrameworkDetectStep(PackagingStep):
@@ -237,7 +242,7 @@ class QtFrameworkDetectStep(PackagingStep):
 
 
 # =============================================================================
-#  Step 6 — 图标处理
+#  Step 9 — 图标处理
 # =============================================================================
 
 class IconProcessingStep(PackagingStep):
@@ -312,7 +317,7 @@ class DataFileDetectStep(PackagingStep):
 
 
 # =============================================================================
-#  Step 12a — 配置增强
+#  Step 12 — 配置增强
 # =============================================================================
 
 class ConfigEnhanceStep(PackagingStep):
@@ -341,7 +346,7 @@ class ConfigEnhanceStep(PackagingStep):
 
 
 # =============================================================================
-#  Step 12b — 图标入口注入
+#  Step 13 — 图标入口注入
 # =============================================================================
 
 class IconInjectStep(PackagingStep):
@@ -367,7 +372,7 @@ class IconInjectStep(PackagingStep):
 
 
 # =============================================================================
-#  Step 12c — 执行打包
+#  Step 14 — 执行打包
 # =============================================================================
 
 class BuildExecuteStep(PackagingStep):
@@ -400,7 +405,7 @@ class BuildExecuteStep(PackagingStep):
 
 
 # =============================================================================
-#  Step 12d — 版本信息后处理
+#  Step 15 — 版本信息后处理
 # =============================================================================
 
 class VersionPostProcessStep(PackagingStep):
@@ -424,7 +429,7 @@ class VersionPostProcessStep(PackagingStep):
 
 
 # =============================================================================
-#  Step 12e — 临时文件清理
+#  Step 16 — 临时文件清理
 # =============================================================================
 
 class TempCleanupStep(PackagingStep):

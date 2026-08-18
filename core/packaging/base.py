@@ -8,7 +8,8 @@
 import ast
 import os
 import subprocess
-from typing import Callable, Optional, Set, Tuple
+import time
+from typing import Callable, List, Optional, Set, Tuple
 
 from utils.constants import CREATE_NO_WINDOW, SKIP_DIRECTORIES
 
@@ -152,6 +153,8 @@ class BasePackager:
         self.cancel_flag: Optional[Callable] = None
         self.process_callback: Optional[Callable] = None
         self._last_exe_path: Optional[str] = None
+        # 子进程输出尾部（用于失败特征识别，如 Nuitka GCC 下载损坏）
+        self._output_tail: List[str] = []
 
     def set_log_callback(self, callback: Callable) -> None:
         """设置日志回调函数"""
@@ -195,18 +198,39 @@ class BasePackager:
         Returns:
             (是否被取消, 取消消息)
         """
+        # 预先检测当前解释器是否支持 GBK 编码。
+        # 非中文 Windows、Linux、macOS 或精简版 Python 可能不含 gbk codec，
+        # 调用 .encode("gbk") 会抛 LookupError，导致实时日志输出整体崩溃。
+        try:
+            "".encode("gbk")
+            gbk_available = True
+        except LookupError:
+            gbk_available = False
+
         while True:
             if self._is_cancelled():
                 process.terminate()
                 return True, "打包已取消"
 
             line = process.stdout.readline() if process.stdout else ""
-            if not line and process.poll() is not None:
-                break
+            # 子进程 stdout 已关闭但进程仍存活时，readline 立即返回空串，
+            # 此时若直接进入下一轮会 CPU 100% 空转。引入短暂 sleep 节流。
+            if not line:
+                if process.poll() is not None:
+                    break
+                time.sleep(0.05)
+                continue
 
-            if line:
+            if gbk_available:
                 # 将非 ASCII 字符（emoji 等）替换为 ? 避免在 GBK 终端/日志回调中崩溃
                 safe_line = line.rstrip().encode("gbk", errors="replace").decode("gbk", errors="replace")
-                self.log(safe_line)
+            else:
+                # 当前环境不支持 GBK（非中文 Windows 或 Unix），原样输出
+                safe_line = line.rstrip()
+            self.log(safe_line)
+            # 保留最近 100 行输出，供失败后特征识别使用
+            self._output_tail.append(safe_line)
+            if len(self._output_tail) > 100:
+                del self._output_tail[:-100]
 
         return False, ""

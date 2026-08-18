@@ -5,11 +5,11 @@ Python打包工具 - 版本信息
 """
 
 # 版本号
-__version__ = "1.6.0"
+__version__ = "1.6.3"
 VERSION = __version__
 
 # 构建日期（用于显示，不参与Windows文件版本号）
-BUILD_DATE = "20260603"
+BUILD_DATE = "20260818"
 
 # 完整显示版本（用于UI显示）
 DISPLAY_VERSION = f"{__version__}.{BUILD_DATE}"
@@ -39,11 +39,36 @@ ABOUT_TEXT = ""
 # ABOUT_TEXT = "可有偿提供各种python脚本定制、修改等服务。"
 
 # 是否在反馈弹框中显示捐赠用户专属特权说明
-SHOW_VIP_PRIVILEGE = False
+SHOW_VIP_PRIVILEGE = True
 
 # 项目链接（可选）
 PROJECT_URL = ""
 ISSUE_URL = ""
+
+# 捐赠对话框弹出规则（按软件启动次数触发）
+# - DONATE_PROMPT_INITIAL_COUNTS：前几次启动时弹出的固定次数（如第 5、10 次）
+# - DONATE_PROMPT_INTERVAL：超过初始次数后的周期（如每 10 次启动弹出一次）
+# 修改这两个值即可调整弹出频率，无需改动 GUI 代码。
+DONATE_PROMPT_INITIAL_COUNTS = [5, 10]
+DONATE_PROMPT_INTERVAL = 10
+
+
+def should_show_donate_dialog(launch_count: int) -> bool:
+    """根据启动次数判断是否应弹出捐赠对话框。
+
+    Args:
+        launch_count: 当前启动次数（已递增后的值）
+
+    Returns:
+        是否应弹出捐赠对话框
+    """
+    if launch_count in DONATE_PROMPT_INITIAL_COUNTS:
+        return True
+    # 超过初始次数后按周期触发（避免与 initial_counts 重复判断）
+    max_initial = max(DONATE_PROMPT_INITIAL_COUNTS, default=0)
+    if launch_count > max_initial and DONATE_PROMPT_INTERVAL > 0:
+        return launch_count % DONATE_PROMPT_INTERVAL == 0
+    return False
 
 
 def get_version() -> str:

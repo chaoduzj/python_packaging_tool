@@ -102,7 +102,11 @@ class DependencyInstaller:
     # 已知的不存在于 PyPI 的模块模式（通常是内部模块）
     # 这些模式用于快速过滤，避免尝试从 PyPI 安装
     INTERNAL_MODULE_SUFFIXES: Set[str] = {
-        # 常见的内部模块后缀
+        # snake_case 内部模块后缀（如 my_worker、foo_handler）
+        #
+        # 用于 is_likely_internal_module() 中对 name_lower 做小写后缀匹配。
+        # PascalCase 命名（如 MyWorker）由该方法内部的 PascalCase 分支
+        # 用独立的 internal_suffixes 元组处理，两套互补、不可合并。
         "_worker",
         "_handler",
         "_manager",
@@ -457,14 +461,20 @@ class DependencyInstaller:
         ".mypy_cache", ".ruff_cache", ".vs", "htmlcov", "coverage",
     }
 
-    # PyPI 包验证缓存
-    _pypi_validation_cache: Dict[str, bool] = {}
+    # PyPI 包验证缓存上限，避免 GUI 长时间运行后无限增长。
+    # 注：此前为类级共享 dict，会跨实例累积且永不失效，导致：
+    #   1) 内存随包名数量线性增长
+    #   2) 网络状态变化后过期结果不再更新（之前不存在的包被永久判为不存在）
+    # 现改为实例级 dict + 大小上限，使用简单的 FIFO 淘汰策略。
+    PYPI_VALIDATION_CACHE_MAX = 256
 
     def __init__(self):
         """初始化依赖安装器"""
         self.log: Callable = print
         self.cancel_flag: Optional[Callable] = None
         self.network_utils = NetworkUtils()
+        # 实例级缓存，随 DependencyInstaller 生命周期销毁
+        self._pypi_validation_cache: Dict[str, bool] = {}
 
     def set_log_callback(self, callback: Callable) -> None:
         """设置日志回调函数"""
@@ -516,7 +526,15 @@ class DependencyInstaller:
             upper_count = sum(1 for c in name if c.isupper())
             # 如果有多个大写字母且没有下划线/连字符，可能是内部模块
             if upper_count >= 2 and "_" not in name and "-" not in name:
-                # 常见的内部模块后缀
+                # PascalCase 内部模块后缀（如 FooWorker、BarManager）
+                #
+                # 注意：此列表与类常量 INTERNAL_MODULE_SUFFIXES（snake_case 后缀如
+                # "_worker"、"_handler"）**形态不同、用途互补**，并非重复：
+                # - INTERNAL_MODULE_SUFFIXES 用于匹配 snake_case 命名（my_worker）
+                #   在 L507 处对 name_lower 做小写后缀匹配
+                # - 此处 PascalCase 列表用于匹配 CamelCase 命名（MyWorker）
+                #   仅在 name[0].isupper() 且无下划线分支内对原始 name 做大小写敏感匹配
+                # 强行合并会引入大小写归一化与额外分支判断，收益有限，故保留两套。
                 internal_suffixes = (
                     "Nodes",
                     "Codes",
@@ -619,7 +637,7 @@ class DependencyInstaller:
                 )
                 exists = result.returncode == 0
 
-            self._pypi_validation_cache[package_name] = exists
+            self._cache_pypi_validation(package_name, exists)
             return exists
 
         except subprocess.TimeoutExpired:
@@ -628,6 +646,22 @@ class DependencyInstaller:
         except Exception:
             # 出错时假设包可能存在
             return True
+
+    def _cache_pypi_validation(self, package_name: str, exists: bool) -> None:
+        """写入 PyPI 验证缓存，超限时按 FIFO 淘汰最早条目。"""
+        cache = self._pypi_validation_cache
+        if package_name in cache:
+            # 已存在则更新值，不调整顺序（避免重复写入导致无限增长）
+            cache[package_name] = exists
+            return
+        if len(cache) >= self.PYPI_VALIDATION_CACHE_MAX:
+            # FIFO 淘汰：移除第一个插入的 key
+            try:
+                first_key = next(iter(cache))
+                del cache[first_key]
+            except (StopIteration, KeyError):
+                pass
+        cache[package_name] = exists
 
     def _collect_project_modules_recursive(
         self,
@@ -888,11 +922,6 @@ class DependencyInstaller:
                 self.log(f"跳过疑似内部模块: {dep} (命名模式不符合PyPI规范)")
                 continue
 
-            # 检查依赖分析器是否已标记为内部模块
-            if is_internal_module_func and is_internal_module_func(dep):
-                self.log(f"跳过内部模块: {dep}")
-                continue
-
             filtered_dependencies.add(dep)
 
         return filtered_dependencies
@@ -969,11 +998,23 @@ class DependencyInstaller:
             packages_to_install[install_name].append(dep)
 
         # 检查已安装的包
+        # 性能优化：一次性 pip list，避免对每个包都启动一个 pip show 子进程
+        # （单个 pip show 超时 10s，20 个依赖最坏 200s；批量后仅需一次 ~3s）
+        installed_packages = self._get_installed_packages_set(python_path)
+        batch_available = len(installed_packages) > 0 or len(packages_to_install) == 0
+
         already_installed = []
         packages_need_install = {}
 
         for install_name, import_names in packages_to_install.items():
-            if self._check_package_installed(python_path, install_name):
+            if batch_available:
+                # 批量查询：内存中查找（大小写不敏感）
+                is_installed = install_name.lower() in installed_packages
+            else:
+                # 批量查询失败，回退到逐包 pip show
+                is_installed = self._check_package_installed(python_path, install_name)
+
+            if is_installed:
                 already_installed.append((install_name, import_names))
             else:
                 packages_need_install[install_name] = import_names
@@ -1104,6 +1145,14 @@ class DependencyInstaller:
                     timeout=30,
                     creationflags=CREATE_NO_WINDOW if sys.platform == "win32" else 0,
                 )
+            elif tool.lower() in ("cx_freeze", "cx-freeze"):
+                result = subprocess.run(
+                    [python_path, "-c", "import cx_Freeze; print(cx_Freeze.__version__)"],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    creationflags=CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                )
             else:
                 result = subprocess.run(
                     [python_path, "-c", f"import {tool}; print({tool}.__version__)"],
@@ -1117,6 +1166,37 @@ class DependencyInstaller:
 
         except Exception:
             return False
+
+    def _get_installed_packages_set(self, python_path: str) -> set:
+        """一次性获取已安装包名集合（小写归一化）。
+
+        性能：单次 `pip list --format=json` 子进程，替代逐包 `pip show`。
+        对于 20 个依赖可从最坏 200 秒降至 ~3 秒。
+
+        Args:
+            python_path: Python 解释器路径
+
+        Returns:
+            已安装包名集合（小写）。失败时返回空集合，
+            调用方应回退到单包检查。
+        """
+        try:
+            import json
+
+            result = subprocess.run(
+                [python_path, "-m", "pip", "list", "--format=json"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                creationflags=CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            )
+            if result.returncode != 0:
+                return set()
+
+            package_list = json.loads(result.stdout)
+            return {pkg["name"].lower() for pkg in package_list}
+        except Exception:
+            return set()
 
     def _check_package_installed(
         self,

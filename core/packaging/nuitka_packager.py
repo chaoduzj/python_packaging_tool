@@ -30,6 +30,7 @@ from core.analyzer_constants import (
 from core.packaging.base import CREATE_NO_WINDOW, BasePackager, verify_tool
 from core.packaging.compiler_provider import CompilerProvider
 from core.packaging.compressor_provider import CompressorProvider
+from utils.constants import has_chinese
 
 
 class NuitkaPackager(BasePackager):
@@ -170,6 +171,13 @@ class NuitkaPackager(BasePackager):
             qt_lower = qt_framework.lower()
             if qt_lower in NUITKA_OFFICIAL_PLUGINS:
                 cmd.append(f"--enable-plugin={NUITKA_OFFICIAL_PLUGINS[qt_lower]}")
+            # 显式包含 Qt 插件，确保运行时所需的平台插件（platforms/qwindows.dll）
+            # 等被一并打包。Qt 框架启动时必须找到 platforms 插件，否则会报
+            # "no Qt platform plugin could be initialized"。
+            # "sensible" 已涵盖 platforms/iconengines/imageformats 等，此处显式声明
+            # 以避免不同 Nuitka 版本默认行为差异导致平台插件缺失。
+            if qt_lower in ("pyqt6", "pyqt5", "pyside6", "pyside2"):
+                cmd.append("--include-qt-plugins=sensible,styles")
 
         if config.get("uses_tkinter"):
             cmd.append("--enable-plugin=tk-inter")
@@ -221,13 +229,9 @@ class NuitkaPackager(BasePackager):
             fw_lower = fw_name.lower()
             if fw_lower in FRAMEWORKS_WITH_DATA_FILES:
                 for src_pattern, dest_name in FRAMEWORKS_WITH_DATA_FILES[fw_lower]:
-                    resolved_src = self._resolve_framework_data_path(
-                        src_pattern, python_path
-                    )
+                    resolved_src = self._resolve_framework_data_path(src_pattern, python_path)
                     if not resolved_src or not os.path.exists(resolved_src):
-                        self.log(
-                            f"  跳过框架数据目录（不存在）: {src_pattern}"
-                        )
+                        self.log(f"  跳过框架数据目录（不存在）: {src_pattern}")
                         continue
                     data_arg = f"--include-data-dir={resolved_src}={dest_name}"
                     if data_arg not in cmd:
@@ -309,9 +313,7 @@ class NuitkaPackager(BasePackager):
             if tempdir_spec:
                 # 检查 spec 中是否包含需要 metadata 的占位符
                 metadata_placeholders = {"{COMPANY}", "{PRODUCT}", "{VERSION}"}
-                used_placeholders = {
-                    p for p in metadata_placeholders if p in tempdir_spec
-                }
+                used_placeholders = {p for p in metadata_placeholders if p in tempdir_spec}
 
                 if used_placeholders:
                     # 从 version_info 获取对应的 metadata
@@ -325,36 +327,25 @@ class NuitkaPackager(BasePackager):
                         safe_company = company or "MyCompany"
                         cmd.append(f"--company-name={safe_company}")
                         if not company:
-                            self.log(
-                                "  警告: tempdir_spec 包含 {COMPANY} 但未配置公司名，"
-                                "使用默认属性 'MyCompany'"
-                            )
+                            self.log("  警告: tempdir_spec 包含 {COMPANY} 但未配置公司名，使用默认属性 'MyCompany'")
 
                     if "{PRODUCT}" in used_placeholders:
                         safe_product = product or "MyProduct"
                         cmd.append(f"--product-name={safe_product}")
                         if not product:
-                            self.log(
-                                "  警告: tempdir_spec 包含 {PRODUCT} 但未配置产品名，"
-                                "使用默认属性 'MyProduct'"
-                            )
+                            self.log("  警告: tempdir_spec 包含 {PRODUCT} 但未配置产品名，使用默认属性 'MyProduct'")
 
                     if "{VERSION}" in used_placeholders:
                         safe_version = version or "1.0.0"
                         cmd.append(f"--file-version={safe_version}")
                         if not version:
-                            self.log(
-                                "  警告: tempdir_spec 包含 {VERSION} 但未配置版本号，"
-                                "使用默认属性 '1.0.0'"
-                            )
+                            self.log("  警告: tempdir_spec 包含 {VERSION} 但未配置版本号，使用默认属性 '1.0.0'")
 
                 cmd.append(f"--onefile-tempdir-spec={tempdir_spec}")
 
             # 编译报告
             if nuitka_adv.get("generate_report", False):
-                report_path = (
-                    nuitka_adv.get("report_path", "") or "compilation-report.xml"
-                )
+                report_path = nuitka_adv.get("report_path", "") or "compilation-report.xml"
                 cmd.append(f"--report={report_path}")
 
             # 用户包配置文件
@@ -381,9 +372,7 @@ class NuitkaPackager(BasePackager):
                 env["PATH"] = gcc_dir + os.pathsep + env.get("PATH", "")
                 cmd.append("--mingw64")
 
-                cache_downloads = os.path.join(
-                    self._compiler_provider.get_nuitka_cache_dir(), "downloads"
-                )
+                cache_downloads = os.path.join(self._compiler_provider.get_nuitka_cache_dir(), "downloads")
                 if actual_gcc_path.startswith(cache_downloads):
                     env.setdefault("NUITKA_CACHE_DIR_DOWNLOADS", cache_downloads)
 
@@ -392,6 +381,20 @@ class NuitkaPackager(BasePackager):
     def _resolve_gcc_executable(self, gcc_path: str) -> Optional[str]:
         """解析 GCC 可执行文件路径（委托给 CompilerProvider）。"""
         return self._compiler_provider._resolve_executable(gcc_path)
+
+    def _is_gcc_download_failure(self) -> bool:
+        """判断 Nuitka 失败是否由 GCC 工具链下载/解压损坏引起。
+
+        匹配 Nuitka getCachedDownload() 在 zip 损坏时输出的特征消息：
+        - "Problem with the downloaded zip file, deleting it."
+        - "Error, need 'mingw64\\bin\\gcc.exe' as extracted from ..."
+        """
+        tail = "\n".join(self._output_tail)
+        return (
+            "Problem with the downloaded zip file" in tail
+            or "need 'mingw64\\bin\\gcc.exe'" in tail
+            or "need 'mingw32\\bin\\gcc.exe'" in tail
+        )
 
     def _add_version_info_to_cmd(
         self,
@@ -408,12 +411,7 @@ class NuitkaPackager(BasePackager):
 
         standalone 模式额外通过 rcedit 后处理确保中文版本信息完全正确。
         """
-
-        def has_chinese(text: str) -> bool:
-            if not text:
-                return False
-            return any("\u4e00" <= char <= "\u9fff" for char in text)
-
+        # 复用 utils.constants.has_chinese（覆盖基本区 + CJK 扩展区）
         has_chinese_info = any(has_chinese(str(v)) for v in version_info.values())
 
         # 始终将非空字段传给 Nuitka（CreateProcessW 正确处理 UTF-8）
@@ -470,10 +468,23 @@ class NuitkaPackager(BasePackager):
 
         self.log(f"✓ Nuitka 版本: {version_info}")
 
+        # Windows 下提前预置 Nuitka 精确版本的 GCC 工具链。
+        # Nuitka >= 2.1 仅接受其版本化缓存目录中的精确版本 GCC
+        # （downloads/gcc/<arch>/<release-tag>/mingw64），其他位置的 GCC
+        # 一律被忽略；且 Nuitka 自带下载器无重试机制，zip 损坏会直接
+        # FATAL。提前用内置下载器（多线程+重试+完整性校验）就位后，
+        # Nuitka 检测到 gcc.exe 已存在会完全跳过下载环节。
+        if sys.platform == "win32":
+            provisioned_gcc = self._compiler_provider.ensure_nuitka_gcc(
+                python_path, cancel_check=self._is_cancelled
+            )
+            if provisioned_gcc and not gcc_path:
+                gcc_path = provisioned_gcc
+
         # 如果没有指定 GCC 路径，自动使用 Nuitka 缓存中的 mingw64
         # 防止 Nuitka 4.x 因版本不匹配而重复下载 GCC
         if not gcc_path:
-            gcc_path = self._find_cached_gcc()
+            gcc_path = self.find_gcc()
             if gcc_path:
                 self.log(f"使用 Nuitka 缓存中的 GCC: {gcc_path}")
 
@@ -517,25 +528,50 @@ class NuitkaPackager(BasePackager):
         self.log(f"\n执行命令: {' '.join(cmd[:5])}...")
 
         try:
-            # 执行打包
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                env=env,
-                creationflags=CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-            )
+            # GCC 下载损坏属于可恢复失败，最多执行 2 次（首次 + 重试）
+            for attempt in (1, 2):
+                self._output_tail = []
 
-            if self.process_callback:
-                self.process_callback(process)
+                # 执行打包
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=env,
+                    creationflags=CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                )
 
-            # 实时输出日志
-            cancelled, msg = self._read_process_output(process)
-            if cancelled:
-                return False, msg
+                if self.process_callback:
+                    self.process_callback(process)
+
+                # 实时输出日志
+                cancelled, msg = self._read_process_output(process)
+                if cancelled:
+                    return False, msg
+
+                if process.returncode == 0:
+                    break
+
+                # Nuitka 自带下载器无重试机制，GCC 压缩包损坏会直接 FATAL。
+                # 检测到该特征时，用内置下载器重新预置 GCC 后重试一次。
+                if attempt == 1 and self._is_gcc_download_failure():
+                    self.log("\n检测到 Nuitka 下载的 GCC 压缩包损坏，正在重新预置 GCC 并重试...")
+                    self._compiler_provider.ensure_nuitka_gcc(
+                        python_path, cancel_check=self._is_cancelled
+                    )
+                    continue
+
+                error_msg = f"Nuitka 执行失败，返回码: {process.returncode}"
+                if self._is_gcc_download_failure():
+                    error_msg += (
+                        "\n\n原因: Nuitka 下载 GCC 工具链失败（网络不稳定导致压缩包损坏）。"
+                        "\n建议: 检查网络/代理后重试，或从以下地址手动下载对应版本并解压到 Nuitka 缓存目录:"
+                        "\nhttps://github.com/brechtsanders/winlibs_mingw/releases"
+                    )
+                return False, error_msg
 
             # 检查结果
             if process.returncode == 0:
@@ -543,17 +579,25 @@ class NuitkaPackager(BasePackager):
                 exe_path = self._find_output_exe(output_dir, build_name, config)
 
                 if exe_path and os.path.exists(exe_path):
-                    # 如果使用了临时名称，重命名
+                    # 如果使用了临时名称，重命名为最终名称
                     if temp_name:
-                        final_exe_path = os.path.join(
-                            os.path.dirname(exe_path), f"{script_name}.exe"
-                        )
-                        try:
-                            os.rename(exe_path, final_exe_path)
-                            exe_path = final_exe_path
-                            self.log(f"已重命名为: {script_name}.exe")
-                        except Exception as e:
-                            self.log(f"⚠️ 重命名失败: {e}")
+                        is_onefile = config.get("onefile", True)
+                        if is_onefile:
+                            # onefile 模式：输出为单个 exe，直接重命名
+                            exe_path = self._rename_onefile_exe(exe_path, script_name)
+                        else:
+                            # standalone 模式：输出为 .dist 目录，
+                            # 必须同时重命名 exe 和 .dist 目录，
+                            # 否则 exe 与依赖（包含 Qt platforms 插件）被遗留在
+                            # temp_xxx.dist 中，用户易误拆分导致运行时找不到插件
+                            #
+                            # 注意：此处将 .dist 目录重命名为 script_name.dist，
+                            # 上层 Packager._rename_nuitka_dist 会进一步判断 —— 仅当
+                            # program_name 与 script_name 不同时才会再次重命名为
+                            # program_name.dist。两层重命名互不冲突，因每层都做了
+                            # "目标已是期望名称则跳过" 的短路判断（见 _rename_standalone_dist
+                            # 与 Packager._rename_nuitka_dist）。
+                            exe_path = self._rename_standalone_dist(exe_path, build_name, script_name)
 
                     self._last_exe_path = exe_path
 
@@ -568,6 +612,82 @@ class NuitkaPackager(BasePackager):
 
         except Exception as e:
             return False, f"执行 Nuitka 时出错: {str(e)}"
+
+    def _rename_onefile_exe(self, exe_path: str, final_name: str) -> str:
+        """onefile 模式：将临时名称的单个 exe 重命名为最终名称。
+
+        Args:
+            exe_path: 当前 exe 路径（使用临时名）
+            final_name: 最终文件名（不含扩展名）
+
+        Returns:
+            重命名后的 exe 路径（失败时返回原路径）
+        """
+        final_exe_path = os.path.join(os.path.dirname(exe_path), f"{final_name}.exe")
+        try:
+            if os.path.exists(final_exe_path):
+                os.remove(final_exe_path)
+            os.rename(exe_path, final_exe_path)
+            self.log(f"已重命名为: {final_name}.exe")
+            return final_exe_path
+        except Exception as e:
+            self.log(f"⚠️ 重命名失败: {e}")
+            return exe_path
+
+    def _rename_standalone_dist(self, exe_path: str, build_name: str, final_name: str) -> str:
+        """standalone 模式：同时重命名 .dist 目录和其中的 exe。
+
+        standalone 模式下 Qt 运行时依赖 exe 同级目录下的 PyQt6/Qt6/plugins/
+        插件目录（如 platforms/qwindows.dll）。若仅重命名 exe 而保留
+        temp_xxx.dist 目录名，用户会看到一个看似临时文件夹的目录，
+        易将 exe 单独拷贝出来，导致 exe 与插件分离，进而报
+        "no Qt platform plugin could be initialized" 错误。
+
+        Args:
+            exe_path: 当前 exe 路径（位于 temp_xxx.dist 内）
+            build_name: 构建时使用的临时名（如 temp_xxx）
+            final_name: 最终名称（不含扩展名）
+
+        Returns:
+            重命名后位于新 .dist 目录内的 exe 路径（失败时返回原路径）
+        """
+        dist_dir = os.path.dirname(exe_path)
+        output_dir = os.path.dirname(dist_dir)
+
+        # 预期的源 .dist 目录名为 build_name.dist，目标为 final_name.dist
+        expected_dist = os.path.join(output_dir, f"{build_name}.dist")
+        final_dist = os.path.join(output_dir, f"{final_name}.dist")
+
+        # 1) 先重命名 dist 内的 exe
+        renamed_exe_in_src = os.path.join(dist_dir, f"{final_name}.exe")
+        try:
+            if os.path.abspath(exe_path) != os.path.abspath(renamed_exe_in_src):
+                if os.path.exists(renamed_exe_in_src):
+                    os.remove(renamed_exe_in_src)
+                os.rename(exe_path, renamed_exe_in_src)
+            exe_path = renamed_exe_in_src
+            self.log(f"已重命名 exe 为: {final_name}.exe")
+        except Exception as e:
+            self.log(f"⚠️ exe 重命名失败: {e}")
+            return exe_path
+
+        # 2) 重命名 .dist 目录本身
+        # 仅当当前 dist 目录确实是临时名且与目标名不同时才重命名
+        if os.path.abspath(dist_dir) == os.path.abspath(final_dist):
+            return exe_path
+        if os.path.abspath(dist_dir) != os.path.abspath(expected_dist):
+            # dist 目录名不符合预期，为安全起见不重命名目录
+            self.log(f"  保留 dist 目录名: {os.path.basename(dist_dir)}")
+            return exe_path
+        try:
+            if os.path.exists(final_dist):
+                shutil.rmtree(final_dist)
+            os.rename(dist_dir, final_dist)
+            exe_path = os.path.join(final_dist, f"{final_name}.exe")
+            self.log(f"已重命名输出目录为: {final_name}.dist")
+        except Exception as e:
+            self.log(f"⚠️ 输出目录重命名失败（exe 仍可用，但目录名为临时名）: {e}")
+        return exe_path
 
     @classmethod
     def _get_tools_dir(cls) -> Optional[str]:
@@ -612,11 +732,6 @@ class NuitkaPackager(BasePackager):
         return CompressorProvider.get_cache_dir()
 
     @classmethod
-    def _download_upx_from_github(cls) -> Optional[str]:
-        """从 GitHub 下载 UPX（委托给 CompressorProvider，已废弃——resolve 方法自动处理）。"""
-        return CompressorProvider(log=print)._download()
-
-    @classmethod
     def _log_static(cls, message: str) -> None:
         """静态方法版本的安全日志输出，避免依赖实例级 log 回调。"""
         try:
@@ -641,9 +756,11 @@ class NuitkaPackager(BasePackager):
         # 相对路径：在 Python 环境中查找
         try:
             import subprocess
+
             result = subprocess.run(
                 [
-                    python_path, "-c",
+                    python_path,
+                    "-c",
                     "import sys, importlib.util; "
                     "root_pkg = sys.argv[1].split('/')[0]; "
                     "spec = importlib.util.find_spec(root_pkg); "
@@ -709,9 +826,7 @@ class NuitkaPackager(BasePackager):
 
         return None
 
-    def _clean_build_cache(
-        self, output_dir: str, script_name: str, config: Optional[Dict] = None
-    ) -> None:
+    def _clean_build_cache(self, output_dir: str, script_name: str, config: Optional[Dict] = None) -> None:
         """
         清理 Nuitka 构建缓存
 
@@ -731,17 +846,27 @@ class NuitkaPackager(BasePackager):
 
         # 同时扫描输出目录，查找所有 .build、.dist、.onefile-build 目录
         # 注意：.dist 在 standalone 模式下是最终输出，不应加入清理列表，
-        # 此处仅收集居名不一致时的 .build 和 .onefile-build
+        # 此处仅收集居名不一致时的 .build 和 .onefile-build。
+        #
+        # 安全限制：仅清理与当前构建（script_name / entry_script_name）同名的目录，
+        # 避免在共享输出目录（如 D:\builds\）中误删其他项目的产物。
         onefile_config = config.get("onefile", True) if config else True
+        # 当前构建可能产生的目录名前缀白名单
+        current_build_prefixes = set(names_to_clean)
         try:
             for item in os.listdir(output_dir):
                 item_path = os.path.join(output_dir, item)
-                if os.path.isdir(item_path):
-                    if item.endswith(".build") or item.endswith(".onefile-build"):
-                        names_to_clean.add(item.rsplit(".", 1)[0])
-                    elif item.endswith(".dist") and onefile_config:
-                        # onefile 模式下 .dist 才是中间产物，可加入清理
-                        names_to_clean.add(item.rsplit(".", 1)[0])
+                if not os.path.isdir(item_path):
+                    continue
+                item_base = item.rsplit(".", 1)[0] if "." in item else item
+                # 仅当目录名前缀属于本次构建产物时才考虑清理
+                if item_base not in current_build_prefixes:
+                    continue
+                if item.endswith(".build") or item.endswith(".onefile-build"):
+                    names_to_clean.add(item_base)
+                elif item.endswith(".dist") and onefile_config:
+                    # onefile 模式下 .dist 才是中间产物，可加入清理
+                    names_to_clean.add(item_base)
         except Exception:
             pass
 
@@ -867,18 +992,16 @@ class NuitkaPackager(BasePackager):
         else:
             self.log("  未发现需要清理的编译缓存")
 
-    def extract_gcc(
-        self, gcc_zip_path: str, extract_base_dir: str
-    ) -> Optional[str]:
+    def extract_gcc(self, gcc_zip_path: str, extract_base_dir: str) -> Optional[str]:
         """解压 GCC 工具链（委托给 CompilerProvider）。"""
         return self._compiler_provider.extract_zip(gcc_zip_path, extract_base_dir)
 
     def find_gcc(self) -> Optional[str]:
-        """查找系统中的 GCC 编译器（委托给 CompilerProvider）。"""
-        return self._compiler_provider.resolve()
+        """查找系统中的 GCC 编译器（委托给 CompilerProvider）。
 
-    def _find_cached_gcc(self) -> Optional[str]:
-        """在 Nuitka 缓存中查找 GCC（委托给 CompilerProvider）。"""
+        同时覆盖"在 Nuitka 缓存中查找"场景——CompilerProvider.resolve()
+        已包含缓存目录查找逻辑，故合并原 _find_cached_gcc。
+        """
         return self._compiler_provider.resolve()
 
     def verify_gcc(self, gcc_path: str) -> Tuple[bool, str]:

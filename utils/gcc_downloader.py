@@ -510,6 +510,115 @@ class GCCDownloader:
                     except Exception:
                         pass
 
+    def _get_remote_file_size(self, url: str) -> int:
+        """获取远程文件大小（用于多线程分片下载），失败返回0"""
+        try:
+            response = requests.head(
+                url,
+                headers={"User-Agent": USER_AGENT},
+                timeout=TIMEOUT,
+                allow_redirects=True,
+            )
+            return int(response.headers.get("Content-Length", 0))
+        except Exception:
+            return 0
+
+    def download_from_url(
+        self,
+        url: str,
+        extract_dir: str,
+        keep_zip: bool = False,
+    ) -> Optional[str]:
+        """
+        从指定URL下载GCC工具链并解压到指定目录（带重试和完整性校验）
+
+        用于预置 Nuitka 期望的精确版本 GCC：Nuitka >= 2.1 只接受其
+        版本化缓存目录（downloads/gcc/<arch>/<release-tag>/mingw64）中的
+        GCC，且 Nuitka 自带下载器无重试机制，压缩包损坏会直接 FATAL。
+
+        Args:
+            url: GCC工具链zip的下载地址
+            extract_dir: 解压目标目录（mingw64/mingw32 将位于其下）
+            keep_zip: 解压成功后是否保留zip文件
+
+        Returns:
+            解压后的mingw目录路径，失败返回None
+        """
+        os.makedirs(extract_dir, exist_ok=True)
+        file_name = url.split("/")[-1]
+        dest_path = os.path.join(extract_dir, file_name)
+
+        # 若已存在完整zip（上次下载成功但未来得及解压），直接解压
+        if os.path.exists(dest_path):
+            is_valid, msg = self.verify_zip_file(dest_path)
+            if is_valid:
+                self.log(f"已存在有效的GCC压缩包: {dest_path}")
+                mingw_path = self.extract_zip(dest_path, extract_dir)
+                if mingw_path:
+                    if not keep_zip:
+                        self._safe_remove(dest_path)
+                    return mingw_path
+            else:
+                self.log(f"已存在的压缩包无效 ({msg})，将重新下载")
+                self._safe_remove(dest_path)
+
+        file_size = self._get_remote_file_size(url)
+
+        for attempt in range(1, MAX_RETRIES + 1):
+            if self.cancel_check():
+                self.log("下载已取消")
+                return None
+
+            self.log(f"\n尝试下载 (第 {attempt}/{MAX_RETRIES} 次)...")
+            self.log(f"URL: {url}")
+
+            success = False
+            if file_size > 0:
+                success = self.download_with_multithreading(url, dest_path, file_size)
+
+            if self.cancel_check():
+                self.log("下载已取消")
+                return None
+
+            if not success:
+                self.log("多线程下载失败，尝试单线程下载...")
+                success = self.download_single_thread(url, dest_path, file_size)
+
+                if self.cancel_check():
+                    self.log("下载已取消")
+                    return None
+
+            if not success:
+                self.log(f"第 {attempt} 次下载失败")
+                continue
+
+            # 完整性校验：损坏的zip会让 Nuitka 直接 FATAL，必须在此处拦截
+            self.progress("正在验证文件完整性...")
+            is_valid, msg = self.verify_zip_file(dest_path)
+            if not is_valid:
+                self.log(f"文件验证失败: {msg}")
+                self._safe_remove(dest_path)
+                continue
+
+            self.log("✓ 文件验证通过")
+            mingw_path = self.extract_zip(dest_path, extract_dir)
+            if mingw_path:
+                if not keep_zip:
+                    self._safe_remove(dest_path)
+                return mingw_path
+            self.log("解压失败，重试...")
+
+        self.log(f"\n错误: GCC下载失败，已尝试 {MAX_RETRIES} 次")
+        return None
+
+    @staticmethod
+    def _safe_remove(path: str) -> None:
+        """安全删除文件"""
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
     def download(self) -> Optional[str]:
         """下载GCC工具链并解压，返回mingw目录路径"""
         cache_dir = _get_nuitka_cache_dir()

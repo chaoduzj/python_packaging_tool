@@ -1,4 +1,4 @@
-﻿@echo off
+@echo off
 REM Force UTF-8 encoding and clear screen
 chcp 65001 >nul 2>&1
 if errorlevel 1 chcp 936 >nul 2>&1

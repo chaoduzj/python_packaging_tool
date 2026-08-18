@@ -22,6 +22,7 @@ from core.packaging.config import PackagingConfig
 from core.packaging.dependency_installer import DependencyInstaller
 from core.packaging.icon_processor import IconProcessor
 from core.packaging.network_utils import NetworkUtils
+from core.packaging.cx_freeze_packager import CxFreezePackager
 from core.packaging.nuitka_packager import NuitkaPackager
 from core.packaging.pipeline import PackagingPipeline
 from core.packaging.pipeline_steps import (
@@ -45,6 +46,7 @@ from core.packaging.pipeline_steps import (
 from core.packaging.pyinstaller_packager import PyInstallerPackager
 from core.packaging.venv_manager import VenvManager
 from core.version_info import RceditHandler, VersionInfoHandler, WindowsResourceHandler
+from utils.constants import has_chinese
 from utils.dependency_manager import DependencyManager
 from utils.python_finder import PythonFinder
 
@@ -76,6 +78,7 @@ class Packager:
         self.rcedit_handler = RceditHandler()
         self.pyinstaller_packager = PyInstallerPackager()
         self.nuitka_packager = NuitkaPackager()
+        self.cx_freeze_packager = CxFreezePackager()
 
         # 回调函数
         self.log: Callable = print
@@ -174,6 +177,7 @@ class Packager:
         self.rcedit_handler.log = callback
         self.pyinstaller_packager.set_log_callback(callback)
         self.nuitka_packager.set_log_callback(callback)
+        self.cx_freeze_packager.set_log_callback(callback)
 
     def _set_cancel_flag(self, cancel_flag: Callable) -> None:
         """设置取消标志到所有子模块"""
@@ -181,12 +185,14 @@ class Packager:
         self.dependency_installer.set_cancel_flag(cancel_flag)
         self.pyinstaller_packager.set_cancel_flag(cancel_flag)
         self.nuitka_packager.set_cancel_flag(cancel_flag)
+        self.cx_freeze_packager.set_cancel_flag(cancel_flag)
 
     def _set_process_callback(self, callback: Callable) -> None:
         """设置进程回调到所有子模块"""
         self.process_callback = callback
         self.pyinstaller_packager.set_process_callback(callback)
         self.nuitka_packager.set_process_callback(callback)
+        self.cx_freeze_packager.set_process_callback(callback)
 
     def _get_python_path(self, config: Dict) -> Tuple[Optional[str], str]:
         """
@@ -213,10 +219,6 @@ class Packager:
 
         # 2. 检测是否处于 PyInstaller/Nuitka 打包后的环境中
         if PythonFinder.is_bundled_environment():
-            # self.log(
-            #     "检测到当前运行在打包环境中，sys.executable 不可用于创建虚拟环境"
-            # )
-            # self.log(f"  sys.executable = {sys.executable}")
             self.log("正在搜索系统中安装的 Python 解释器...")
 
             finder = PythonFinder()
@@ -499,10 +501,11 @@ class Packager:
         return self.cancel_flag is not None and self.cancel_flag()
 
     def _has_chinese(self, text: str) -> bool:
-        """检查字符串中是否包含中文字符"""
-        if not text:
-            return False
-        return any("\u4e00" <= char <= "\u9fff" for char in text)
+        """检查字符串中是否包含 CJK 表意文字（委托 utils.constants.has_chinese）。
+
+        覆盖基本区 (U+4E00-U+9FFF) 及扩展 A/B/C-F 区，能识别生僻字、姓名用字。
+        """
+        return has_chinese(text)
 
     def _check_chinese_paths(self, config: Dict) -> None:
         """检查路径中是否包含中文字符并发出警告"""
@@ -772,24 +775,52 @@ class Packager:
                 ]
 
                 cleaned = 0
+                failed: List[str] = []
+                # 关键产物（exe）清理失败需要用户介入的标识
+                critical_exe_names = {f"{program_name}.exe"} if program_name else set()
+                critical_exe_names.add(f"{script_stem}.exe")
+
                 for name in target_dirs:
                     path = os.path.join(output_dir, name)
                     if os.path.isdir(path):
-                        shutil.rmtree(path)
-                        self.log(f"  已清理: {name}/")
-                        cleaned += 1
+                        try:
+                            shutil.rmtree(path)
+                            self.log(f"  已清理: {name}/")
+                            cleaned += 1
+                        except Exception as clean_err:
+                            failed.append(name + "/")
+                            self.log(f"  ⚠️ 清理失败: {name}/ ({clean_err})")
 
                 for name in set(target_files):  # set 去重
                     path = os.path.join(output_dir, name)
                     if os.path.isfile(path):
-                        os.unlink(path)
-                        self.log(f"  已清理: {name}")
-                        cleaned += 1
+                        try:
+                            os.unlink(path)
+                            self.log(f"  已清理: {name}")
+                            cleaned += 1
+                        except Exception as clean_err:
+                            failed.append(name)
+                            self.log(f"  ⚠️ 清理失败: {name} ({clean_err})")
 
-                if cleaned:
+                if cleaned and not failed:
                     self.log(f"✓ 旧构建文件已清理（共 {cleaned} 项）")
-                else:
+                elif cleaned and failed:
+                    self.log(
+                        f"✓ 已清理 {cleaned} 项；但 {len(failed)} 项失败: {', '.join(failed)}"
+                    )
+                elif not failed:
                     self.log("✓ 无需清理")
+
+                # 关键 exe 未清理 → 可能是上次打包的 exe 正在运行
+                critical_failed = [f for f in failed if f in critical_exe_names]
+                if critical_failed:
+                    self.log("!" * 50)
+                    self.log(
+                        f"警告: 关键产物无法删除: {', '.join(critical_failed)}"
+                    )
+                    self.log("  可能原因：上一次打包的 exe 仍在运行（被占用）。")
+                    self.log("  请关闭正在运行的程序后重试，否则可能打包出含旧代码的 exe。")
+                    self.log("!" * 50)
 
             except Exception as e:
                 self.log(f"警告：清理输出目录时出错: {str(e)}")
@@ -1054,46 +1085,6 @@ VSVersionInfo(
             self.log(f"  创建版本信息文件失败: {str(e)}")
             return None
 
-    def _do_package(
-        self,
-        python_path: str,
-        config: Dict,
-        output_dir: str,
-        hidden_imports: List[str],
-        exclude_modules: List[str],
-        icon_path: Optional[str],
-        version_file: Optional[str],
-    ) -> Tuple[bool, str]:
-        """执行实际打包（编排 5 个后处理关注点）。
-
-        拆分为 5 个独立私有方法以解耦 rcedit/UPX/清理逻辑，
-        便于扩展维护，并供 Pipeline 的后处理 Step 各自委托。
-        """
-        self.log("\n" + "=" * 50)
-        self.log("第三阶段：打包")
-        self.log("=" * 50)
-
-        # 1. 配置增强：填充 qt_framework / GUI 框架标志 / 版本文件
-        pack_config, tool = self._build_pack_config(config, version_file)
-
-        # 2. 图标入口注入（仅 Nuitka + 图标 + 非自打包）
-        self._inject_icon_entry(pack_config, tool, output_dir, icon_path)
-
-        # 3. 执行打包
-        success, message = self._execute_build(
-            python_path, config, pack_config, tool,
-            output_dir, hidden_imports, exclude_modules, icon_path,
-        )
-
-        # 4. 版本信息后处理（rcedit）
-        if success:
-            self._post_process_version_info(pack_config, tool)
-
-        # 5. 清理临时文件
-        self._cleanup_temp_files(pack_config, version_file, icon_path)
-
-        return success, message
-
     def _build_pack_config(
         self, config: Dict, version_file: Optional[str]
     ) -> Tuple[Dict, str]:
@@ -1132,12 +1123,11 @@ VSVersionInfo(
         # 中文版本信息 + UPX 不兼容：UPX 压缩后 rcedit 无法修改 PE 资源段。
         # 自动禁用 UPX，确保 rcedit 后处理能修复 Nuitka temp 文件名和中文乱码。
         version_info = pkg_config.version_info or {}
-        has_chinese = any(
-            "\u4e00" <= c <= "\u9fff"
+        vi_has_chinese = any(
+            has_chinese(str(v))
             for v in version_info.values()
-            for c in str(v)
         ) if version_info else False
-        if has_chinese and pkg_config.upx and pkg_config.tool == "nuitka":
+        if vi_has_chinese and pkg_config.upx and pkg_config.tool == "nuitka":
             self.log("\n⚠️ 检测到中文版本信息，自动禁用 UPX 压缩")
             self.log("  UPX 压缩后 rcedit 无法修复 PE 资源中的中文和文件名")
             pkg_config.upx = False
@@ -1188,6 +1178,16 @@ VSVersionInfo(
                 icon_path=icon_path,
                 gcc_path=gcc_path,
             )
+        elif tool == "cx_freeze":
+            packager = self.cx_freeze_packager
+            success, message = packager.package(
+                python_path,
+                pack_config,
+                output_dir,
+                hidden_imports,
+                exclude_modules,
+                icon_path=icon_path,
+            )
         else:
             packager = self.pyinstaller_packager
             success, message = packager.package(
@@ -1208,10 +1208,16 @@ VSVersionInfo(
                 self._rename_nuitka_dist(pack_config)
 
             # PyInstaller standalone 模式：提示 _internal 目录说明
-            if tool != "nuitka" and not pack_config.get("onefile", True):
+            if tool == "pyinstaller" and not pack_config.get("onefile", True):
                 self.log("\n📁 PyInstaller 独立模式输出说明：")
                 self.log("  exe 同级目录下的 _internal/ 是 PyInstaller 6.x 的必要结构")
                 self.log("  如需单文件分发，请勾选「单文件模式」重新打包")
+
+            # cx_Freeze 始终输出目录模式
+            if tool == "cx_freeze":
+                self.log("\n📁 cx_Freeze 输出说明：")
+                self.log("  cx_Freeze 始终以目录模式输出，包含 exe 及所有依赖文件")
+                self.log("  分发时请将整个输出目录一并拷贝")
 
         return success, message
 
@@ -1220,6 +1226,15 @@ VSVersionInfo(
 
         Nuitka 按入口脚本名命名 dist 目录（如 _ppt_entry.dist），
         重命名为程序名称更直观（如 查重工具/）。
+
+        注意：此处是 NuitkaPackager._rename_standalone_dist 之后的「第二层」重命名。
+        - 第一层（NuitkaPackager.package）：temp_xxx.dist → script_name.dist
+          （build_name 来自 program_name 或 project_dir basename，通常已等于 program_name）
+        - 第二层（此处）：script_name.dist → program_name.dist
+          （仅当 program_name 与 script_name 不同时才实际执行重命名）
+
+        两层都做了 "目标已是期望名称则短路返回" 的判断，因此即便 script_name
+        与 program_name 相同，重复调用也不会产生副作用或日志噪音。
         """
         exe_path = self._last_exe_path
         if not exe_path:
@@ -1256,17 +1271,13 @@ VSVersionInfo(
             if isinstance(pack_config, dict)
             else getattr(pack_config, "version_info", {})
         )
-        has_chinese = (
-            any(
-                "\u4e00" <= c <= "\u9fff"
-                for v in version_info.values()
-                for c in str(v)
-            )
+        vi_has_chinese = (
+            any(has_chinese(str(v)) for v in version_info.values())
             if version_info
             else False
         )
 
-        if has_chinese and self._last_exe_path:
+        if vi_has_chinese and self._last_exe_path:
             if tool != "nuitka":
                 self.log("\n✅ PyInstaller 已通过 --version-file 嵌入中文版本信息，无需 rcedit")
             else:
@@ -1315,138 +1326,6 @@ VSVersionInfo(
                 self.log(f"已清理临时注入脚本: {entry_script}")
             except Exception:
                 pass
-
-    def package(
-        self,
-        config: Union[Dict, PackagingConfig],
-        log_callback: Optional[Callable] = None,
-        cancel_flag: Optional[Callable] = None,
-        process_callback: Optional[Callable] = None,
-    ) -> Tuple[bool, str, Optional[str]]:
-        """
-        [DEPRECATED] 传统打包入口 — 已由 package_via_pipeline() 取代。
-
-        保留此方法用于回退验证，新调用方请使用 package_via_pipeline()。
-        计划在下一阶段（删死代码 + 大文件简化）中移除。
-        """
-        # 规范化配置：将 PackagingConfig 转为 dict（内部方法仍用 dict）
-        if isinstance(config, PackagingConfig):
-            config = config.as_dict()
-
-        # 设置回调
-        if log_callback:
-            self._set_log_callback(log_callback)
-        if cancel_flag:
-            self._set_cancel_flag(cancel_flag)
-        if process_callback:
-            self._set_process_callback(process_callback)
-
-        try:
-            # 检查取消
-            if self._is_cancelled():
-                return False, "打包已取消", None
-
-            # 1. 获取基础 Python 路径
-            base_python_path, python_error = self._get_python_path(config)
-            if not base_python_path:
-                return False, python_error or "未找到 Python 环境", None
-
-            self.log(f"基础 Python: {base_python_path}")
-
-            # 检查取消
-            if self._is_cancelled():
-                return False, "打包已取消", None
-
-            # 2. 设置虚拟环境（如果启用）
-            python_path = self._setup_venv_if_needed(config, base_python_path)
-            if python_path != base_python_path:
-                self.log(f"使用虚拟环境 Python: {python_path}")
-
-            # 3. 检查中文路径警告
-            self._check_chinese_paths(config)
-
-            # 检查取消
-            if self._is_cancelled():
-                return False, "打包已取消", None
-
-            # 4. 准备输出目录
-            script_path = config["script_path"]
-            project_dir = config.get("project_dir")
-            output_dir = self._prepare_output_dir(config)
-            self.log(f"输出目录: {output_dir}")
-
-            # 检查取消
-            if self._is_cancelled():
-                return False, "打包已取消", None
-
-            # 5. 检测 Qt 框架
-            primary_qt = self.dependency_analyzer.detect_primary_qt_framework(
-                script_path, project_dir
-            )
-            if primary_qt:
-                self.log(f"检测到GUI主要 Qt 框架: {primary_qt}")
-
-            # 检查取消
-            if self._is_cancelled():
-                return False, "打包已取消", None
-
-            # 6. 分析依赖
-            deps, hidden_imports, exclude_modules = self._analyze_dependencies(
-                script_path, project_dir, python_path, config
-            )
-
-            # 检查取消
-            if self._is_cancelled():
-                return False, "打包已取消", None
-
-            # 7. 安装依赖（补充安装分析到的额外依赖）
-            self._install_dependencies(python_path, deps, project_dir)
-
-            # 检查取消
-            if self._is_cancelled():
-                return False, "打包已取消", None
-
-            # 8. 安装打包工具
-            tool = config.get("tool", "pyinstaller")
-            self.log(f"\n检查打包工具 {tool}...")
-            self.dependency_installer.install_packaging_tool(python_path, tool)
-
-            # 检查取消
-            if self._is_cancelled():
-                return False, "打包已取消", None
-
-            # 9. 处理图标
-            icon_path = self._process_icon(config, output_dir, python_path)
-
-            # 10. 准备版本信息
-            version_file = self._prepare_version_info(config, output_dir)
-
-            # 检查取消
-            if self._is_cancelled():
-                return False, "打包已取消", None
-
-            # 11. 自动检测并包含运行时数据文件（config.env、icon.* 等）
-            self._auto_detect_data_files(config, project_dir, script_path)
-
-            # 12. 执行打包
-            success, message = self._do_package(
-                python_path,
-                config,
-                output_dir,
-                hidden_imports,
-                exclude_modules,
-                icon_path,
-                version_file,
-            )
-
-            return success, message, self._last_exe_path
-
-        except Exception as e:
-            self.log(f"打包异常: {e}")
-            import traceback
-
-            self.log(traceback.format_exc())
-            return False, f"打包过程出错: {str(e)}", None
 
     @staticmethod
     def _create_icon_entry_wrapper(
@@ -1615,6 +1494,15 @@ VSVersionInfo(
             "splash.jpg",
         ]
 
+        # 通配图片模式（在项目根目录和 resources/ 下扫描）
+        image_globs = [
+            "*.png",
+            "*.jpg",
+            "*.jpeg",
+            "*.gif",
+            "*.bmp",
+        ]
+
         extra_data: list = config.get("extra_data", []) or []
         existing_basenames = {os.path.basename(p) for p in extra_data}
         newly_detected: list = []
@@ -1658,6 +1546,29 @@ VSVersionInfo(
                 existing_basenames.add(os.path.basename(candidate))
                 newly_detected.append(candidate)
                 self.log(f"  检测到资源文件: {os.path.basename(candidate)}")
+
+        # 扫描项目根目录和 resources/ 下的图片文件（*.png, *.jpg 等）
+        # 同时扫描 images/, assets/, img/, pics/ 等常见图片目录
+        from glob import glob as _glob
+
+        image_dirs = [scan_dir]
+        for sub in ["resources", "images", "assets", "img", "pics", "icons"]:
+            d = os.path.join(scan_dir, sub)
+            if os.path.isdir(d):
+                image_dirs.append(d)
+
+        for g_pattern in image_globs:
+            for img_dir in image_dirs:
+                for candidate in _glob(os.path.join(img_dir, g_pattern)):
+                    if (
+                        os.path.isfile(candidate)
+                        and os.path.basename(candidate) not in existing_basenames
+                    ):
+                        extra_data.append(candidate)
+                        existing_basenames.add(os.path.basename(candidate))
+                        newly_detected.append(candidate)
+                        rel = os.path.relpath(candidate, scan_dir)
+                        self.log(f"  检测到图片文件: {rel}")
 
         if newly_detected:
             config["extra_data"] = extra_data

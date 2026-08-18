@@ -1,19 +1,9 @@
 """
-GUI 处理器模块
+GUI 处理器模块（占位）
 
-本模块包含从 main_window.py 拆分出来的各种处理器，遵循单一职责原则：
-- file_handlers: 文件浏览和路径处理
-- packaging_handler: 打包相关逻辑
-- gcc_handler: GCC 下载和管理
-- version_info_handlers: 版本信息相关处理
+历史背景：早期规划将 MainWindow 拆分为 FileHandlerMixin / GCCHandlerMixin /
+PackagingHandlerMixin，但 MainWindow 实际从未继承这些 Mixin，对应方法在
+MainWindow 内部维护。这些未接入的 Mixin 文件已于代码审查中清理。
+
+如未来需要按 Mixin 模式拆分 MainWindow，可在此目录重建。
 """
-
-from gui.handlers.file_handlers import FileHandlerMixin
-from gui.handlers.gcc_handler import GCCHandlerMixin
-from gui.handlers.packaging_handler import PackagingHandlerMixin
-
-__all__ = [
-    "FileHandlerMixin",
-    "GCCHandlerMixin",
-    "PackagingHandlerMixin",
-]
